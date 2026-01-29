@@ -48,31 +48,35 @@ impl ProviderRegistry {
     /// respecting the given config for enable/disable and overrides.
     ///
     /// Provider priority (first registered wins for a given model ID):
-    /// 1. genai-backed providers (if `provider-genai` feature enabled)
+    /// 1. Built-in raw reqwest providers (always available, support tool calling)
     /// 2. async-openai-backed providers (if `provider-async-openai` feature enabled)
-    /// 3. Built-in raw reqwest providers (always available)
+    /// 3. genai-backed providers (if `provider-genai` feature enabled, no tool support)
+    /// 4. OpenAI Codex OAuth providers (if `provider-openai-codex` feature enabled)
     pub fn from_env_with_config(config: &ProvidersConfig) -> Self {
         let mut reg = Self {
             providers: HashMap::new(),
             models: Vec::new(),
         };
 
-        #[cfg(feature = "provider-genai")]
-        {
-            reg.register_genai_providers(config);
-        }
+        // Built-in providers first: they support tool calling.
+        reg.register_builtin_providers(config);
 
         #[cfg(feature = "provider-async-openai")]
         {
             reg.register_async_openai_providers(config);
         }
 
+        // GenAI providers last: they don't support tool calling,
+        // so they only fill in models not already covered above.
+        #[cfg(feature = "provider-genai")]
+        {
+            reg.register_genai_providers(config);
+        }
+
         #[cfg(feature = "provider-openai-codex")]
         {
             reg.register_openai_codex_providers(config);
         }
-
-        reg.register_builtin_providers(config);
 
         reg
     }
