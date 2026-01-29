@@ -345,4 +345,5 @@
   });
 
   connect();
+  input.focus();
 })();
