@@ -199,8 +199,16 @@ impl ChatService for LiveChatService {
         let session_key_clone = session_key.clone();
         let handle = tokio::spawn(async move {
             let assistant_text = if stream_only {
-                run_streaming(&state, &run_id_clone, provider, &text, &provider_name, &history)
-                    .await
+                run_streaming(
+                    &state,
+                    &run_id_clone,
+                    provider,
+                    &text,
+                    &provider_name,
+                    &history,
+                    &session_key_clone,
+                )
+                .await
             } else {
                 run_with_tools(
                     &state,
@@ -210,6 +218,7 @@ impl ChatService for LiveChatService {
                     &text,
                     &provider_name,
                     &history,
+                    &session_key_clone,
                 )
                 .await
             };
@@ -278,6 +287,7 @@ async fn run_with_tools(
     text: &str,
     provider_name: &str,
     history: &[serde_json::Value],
+    session_key: &str,
 ) -> Option<String> {
     let native_tools = provider.supports_tools();
     let system_prompt = build_system_prompt(tool_registry, native_tools);
@@ -285,17 +295,21 @@ async fn run_with_tools(
     // Broadcast tool events to the UI as they happen.
     let state_for_events = Arc::clone(state);
     let run_id_for_events = run_id.to_string();
+    let session_key_for_events = session_key.to_string();
     let on_event: Box<dyn Fn(RunnerEvent) + Send + Sync> = Box::new(move |event| {
         let state = Arc::clone(&state_for_events);
         let run_id = run_id_for_events.clone();
+        let sk = session_key_for_events.clone();
         tokio::spawn(async move {
             let payload = match &event {
                 RunnerEvent::Thinking => serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": sk,
                     "state": "thinking",
                 }),
                 RunnerEvent::ThinkingDone => serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": sk,
                     "state": "thinking_done",
                 }),
                 RunnerEvent::ToolCallStart {
@@ -304,6 +318,7 @@ async fn run_with_tools(
                     arguments,
                 } => serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": sk,
                     "state": "tool_call_start",
                     "toolCallId": id,
                     "toolName": name,
@@ -318,6 +333,7 @@ async fn run_with_tools(
                 } => {
                     let mut payload = serde_json::json!({
                         "runId": run_id,
+                        "sessionKey": sk,
                         "state": "tool_call_end",
                         "toolCallId": id,
                         "toolName": name,
@@ -347,11 +363,13 @@ async fn run_with_tools(
                 },
                 RunnerEvent::TextDelta(text) => serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": sk,
                     "state": "delta",
                     "text": text,
                 }),
                 RunnerEvent::Iteration(n) => serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": sk,
                     "state": "iteration",
                     "iteration": n,
                 }),
@@ -389,6 +407,7 @@ async fn run_with_tools(
                 "chat",
                 serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": session_key,
                     "state": "final",
                     "text": result.text,
                     "iterations": result.iterations,
@@ -407,6 +426,7 @@ async fn run_with_tools(
                 "chat",
                 serde_json::json!({
                     "runId": run_id,
+                    "sessionKey": session_key,
                     "state": "error",
                     "error": error_obj,
                 }),
@@ -427,6 +447,7 @@ async fn run_streaming(
     text: &str,
     provider_name: &str,
     history: &[serde_json::Value],
+    session_key: &str,
 ) -> Option<String> {
     let mut messages: Vec<serde_json::Value> = history.to_vec();
     messages.push(serde_json::json!({
@@ -446,6 +467,7 @@ async fn run_streaming(
                     "chat",
                     serde_json::json!({
                         "runId": run_id,
+                        "sessionKey": session_key,
                         "state": "delta",
                         "text": delta,
                     }),
@@ -465,6 +487,7 @@ async fn run_streaming(
                     "chat",
                     serde_json::json!({
                         "runId": run_id,
+                        "sessionKey": session_key,
                         "state": "final",
                         "text": accumulated,
                     }),
@@ -481,6 +504,7 @@ async fn run_streaming(
                     "chat",
                     serde_json::json!({
                         "runId": run_id,
+                        "sessionKey": session_key,
                         "state": "error",
                         "error": error_obj,
                     }),

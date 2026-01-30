@@ -326,7 +326,9 @@
       if (frame.type === "event") {
         if (frame.event === "chat") {
           var p = frame.payload || {};
-          if (p.state === "thinking") {
+          var eventSession = p.sessionKey || activeSessionKey;
+          var isActive = eventSession === activeSessionKey;
+          if (p.state === "thinking" && isActive) {
             removeThinking();
             var thinkEl = document.createElement("div");
             thinkEl.className = "msg assistant thinking";
@@ -338,9 +340,9 @@
             thinkEl.appendChild(dots);
             msgBox.appendChild(thinkEl);
             msgBox.scrollTop = msgBox.scrollHeight;
-          } else if (p.state === "thinking_done") {
+          } else if (p.state === "thinking_done" && isActive) {
             removeThinking();
-          } else if (p.state === "tool_call_start") {
+          } else if (p.state === "tool_call_start" && isActive) {
             removeThinking();
             var card = document.createElement("div");
             card.className = "msg exec-card running";
@@ -366,7 +368,7 @@
             card.appendChild(spin);
             msgBox.appendChild(card);
             msgBox.scrollTop = msgBox.scrollHeight;
-          } else if (p.state === "tool_call_end") {
+          } else if (p.state === "tool_call_end" && isActive) {
             var card = document.getElementById("tool-" + p.toolCallId);
             if (card) {
               card.className = "msg exec-card " + (p.success ? "exec-ok" : "exec-err");
@@ -403,7 +405,7 @@
                 card.appendChild(errMsg);
               }
             }
-          } else if (p.state === "delta" && p.text) {
+          } else if (p.state === "delta" && p.text && isActive) {
             removeThinking();
             if (!streamEl) {
               streamText = "";
@@ -417,34 +419,46 @@
             streamEl.innerHTML = renderMarkdown(streamText);
             msgBox.scrollTop = msgBox.scrollHeight;
           } else if (p.state === "final") {
-            removeThinking();
-            // Suppress the LLM response when it just echoes tool output
-            // already shown in the exec card.
-            var isEcho = lastToolOutput && p.text
-              && p.text.replace(/[`\s]/g, "").indexOf(lastToolOutput.replace(/\s/g, "").substring(0, 80)) !== -1;
-            if (!isEcho) {
-              if (p.text && streamEl) {
-                // Safe: renderMarkdown escapes via esc() before formatting
-                streamEl.innerHTML = renderMarkdown(p.text);
-              } else if (p.text && !streamEl) {
-                addMsg("assistant", renderMarkdown(p.text), true);
+            // Always update sidebar indicators for the event's session.
+            bumpSessionCount(eventSession, 1);
+            setSessionReplying(eventSession, false);
+            if (!isActive) {
+              setSessionUnread(eventSession, true);
+            }
+            if (isActive) {
+              removeThinking();
+              // Suppress the LLM response when it just echoes tool output
+              // already shown in the exec card.
+              var isEcho = lastToolOutput && p.text
+                && p.text.replace(/[`\s]/g, "").indexOf(lastToolOutput.replace(/\s/g, "").substring(0, 80)) !== -1;
+              if (!isEcho) {
+                if (p.text && streamEl) {
+                  // Safe: renderMarkdown calls esc() first to escape all HTML entities
+                  streamEl.innerHTML = renderMarkdown(p.text);
+                } else if (p.text && !streamEl) {
+                  addMsg("assistant", renderMarkdown(p.text), true);
+                }
+              } else if (streamEl) {
+                streamEl.remove();
               }
-            } else if (streamEl) {
-              streamEl.remove();
+              streamEl = null;
+              streamText = "";
+              lastToolOutput = "";
             }
-            streamEl = null;
-            streamText = "";
-            lastToolOutput = "";
           } else if (p.state === "error") {
-            removeThinking();
-            if (p.error && p.error.title) {
-              addErrorCard(p.error);
-            } else {
-              // Backward compat: old payloads with just p.message
-              addErrorMsg(p.message || "unknown");
+            // Always update sidebar indicators for the event's session.
+            setSessionReplying(eventSession, false);
+            if (isActive) {
+              removeThinking();
+              if (p.error && p.error.title) {
+                addErrorCard(p.error);
+              } else {
+                // Backward compat: old payloads with just p.message
+                addErrorMsg(p.message || "unknown");
+              }
+              streamEl = null;
+              streamText = "";
             }
-            streamEl = null;
-            streamText = "";
           }
         }
         if (frame.event === "exec.approval.requested") {
@@ -533,6 +547,9 @@
     var chatParams = { text: text };
     var selectedModel = modelSelect.value;
     if (selectedModel) chatParams.model = selectedModel;
+    var sendSessionKey = activeSessionKey;
+    bumpSessionCount(sendSessionKey, 1);
+    setSessionReplying(sendSessionKey, true);
     sendRpc("chat.send", chatParams).then(function (res) {
       if (res && !res.ok && res.error) {
         addMsg("error", res.error.message || "Request failed");
@@ -872,6 +889,7 @@
     sessions.forEach(function (s) {
       var item = document.createElement("div");
       item.className = "session-item" + (s.key === activeSessionKey ? " active" : "");
+      item.setAttribute("data-session-key", s.key);
 
       var info = document.createElement("div");
       info.className = "session-info";
@@ -883,6 +901,7 @@
 
       var meta = document.createElement("div");
       meta.className = "session-meta";
+      meta.setAttribute("data-session-key", s.key);
       var count = s.messageCount || 0;
       meta.textContent = count + " msg" + (count !== 1 ? "s" : "");
       info.appendChild(meta);
@@ -934,12 +953,38 @@
     });
   }
 
+  function setSessionReplying(key, replying) {
+    var el = sessionList.querySelector('.session-item[data-session-key="' + key + '"]');
+    if (el) el.classList.toggle("replying", replying);
+  }
+
+  function setSessionUnread(key, unread) {
+    var el = sessionList.querySelector('.session-item[data-session-key="' + key + '"]');
+    if (el) el.classList.toggle("unread", unread);
+  }
+
+  function bumpSessionCount(key, increment) {
+    var el = sessionList.querySelector('.session-meta[data-session-key="' + key + '"]');
+    if (!el) return;
+    var current = parseInt(el.textContent, 10) || 0;
+    var next = current + increment;
+    el.textContent = next + " msg" + (next !== 1 ? "s" : "");
+  }
+
   function switchSession(key) {
     activeSessionKey = key;
     localStorage.setItem("moltis-session", key);
     msgBox.textContent = "";
     streamEl = null;
     streamText = "";
+    // Update active highlight and clear unread without re-rendering the list.
+    var items = sessionList.querySelectorAll(".session-item");
+    items.forEach(function (el) {
+      var isTarget = el.getAttribute("data-session-key") === key;
+      el.classList.toggle("active", isTarget);
+      if (isTarget) el.classList.remove("unread");
+    });
+
     sendRpc("sessions.switch", { key: key }).then(function (res) {
       if (res && res.ok && res.payload) {
         var history = res.payload.history || [];
@@ -950,8 +995,25 @@
             addMsg("assistant", renderMarkdown(msg.content || ""), true);
           }
         });
+        // Show thinking dots if this session is still waiting for a response.
+        var item = sessionList.querySelector('.session-item[data-session-key="' + key + '"]');
+        if (item && item.classList.contains("replying")) {
+          removeThinking();
+          var thinkEl = document.createElement("div");
+          thinkEl.className = "msg assistant thinking";
+          thinkEl.id = "thinkingIndicator";
+          var dots = document.createElement("span");
+          dots.className = "thinking-dots";
+          dots.innerHTML = "<span></span><span></span><span></span>";
+          thinkEl.appendChild(dots);
+          msgBox.appendChild(thinkEl);
+          msgBox.scrollTop = msgBox.scrollHeight;
+        }
+        // If this is a new session, re-render the list to show it.
+        if (!sessionList.querySelector('.session-meta[data-session-key="' + key + '"]')) {
+          fetchSessions();
+        }
       }
-      fetchSessions();
     });
   }
 

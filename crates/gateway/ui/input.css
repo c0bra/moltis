@@ -646,6 +646,27 @@
   .session-delete:hover {
     color: var(--error);
   }
+  .session-item.replying .session-label::after {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: middle;
+    animation: pulse 1s infinite;
+  }
+  .session-item.unread .session-label::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: middle;
+  }
 
   /* Methods panel */
   .methods-result {
