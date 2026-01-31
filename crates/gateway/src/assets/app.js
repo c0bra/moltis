@@ -1079,6 +1079,276 @@
   var chatInput = null;
   var chatSendBtn = null;
 
+  // ── Slash commands ───────────────────────────────────────────
+  var slashCommands = [
+    { name: "clear", description: "Clear conversation history" },
+    { name: "compact", description: "Summarize conversation to save tokens" },
+    { name: "context", description: "Show session context and project info" }
+  ];
+  var slashMenuEl = null;
+  var slashMenuIdx = 0;
+  var slashMenuItems = [];
+
+  function slashInjectStyles() {
+    if (document.getElementById("slashMenuStyles")) return;
+    var s = document.createElement("style");
+    s.id = "slashMenuStyles";
+    s.textContent =
+      ".slash-menu{position:absolute;bottom:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:4px;overflow:hidden;z-index:50;box-shadow:var(--shadow-md);animation:.1s ease-out msg-in}" +
+      ".slash-menu-item{padding:7px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--text);transition:background .1s}" +
+      ".slash-menu-item:hover,.slash-menu-item.active{background:var(--bg-hover)}" +
+      ".slash-menu-item .slash-name{font-weight:600;color:var(--accent);font-family:var(--font-mono);font-size:.78rem}" +
+      ".slash-menu-item .slash-desc{color:var(--muted);font-size:.75rem}" +
+      /* context card */
+      ".ctx-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);align-self:center;max-width:520px;width:100%;padding:0;font-size:.8rem;line-height:1.55;animation:.2s ease-out msg-in;overflow:hidden;flex-shrink:0}" +
+      ".ctx-header{background:var(--surface2);padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}" +
+      ".ctx-header svg{flex-shrink:0;opacity:.7}" +
+      ".ctx-header-title{font-weight:600;font-size:.85rem;color:var(--text)}" +
+      ".ctx-section{padding:10px 16px;border-bottom:1px solid var(--border)}" +
+      ".ctx-section:last-child{border-bottom:none}" +
+      ".ctx-section-title{font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px}" +
+      ".ctx-row{display:flex;gap:8px;padding:2px 0;align-items:baseline}" +
+      ".ctx-label{color:var(--muted);min-width:80px;flex-shrink:0;font-size:.78rem}" +
+      ".ctx-value{color:var(--text);word-break:break-all;font-size:.78rem}" +
+      ".ctx-value.mono{font-family:var(--font-mono);font-size:.74rem}" +
+      ".ctx-tag{display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:2px 8px;font-size:.72rem;color:var(--text);margin:2px 2px 2px 0}" +
+      ".ctx-tag .ctx-tag-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}" +
+      ".ctx-file{font-family:var(--font-mono);font-size:.72rem;color:var(--muted);padding:3px 0;display:flex;justify-content:space-between;gap:12px}" +
+      ".ctx-file-path{color:var(--text);word-break:break-all}" +
+      ".ctx-file-size{flex-shrink:0;opacity:.7}" +
+      ".ctx-empty{color:var(--muted);font-style:italic;font-size:.78rem;padding:2px 0}";
+    document.head.appendChild(s);
+  }
+
+  function slashShowMenu(filter) {
+    slashInjectStyles();
+    var matches = slashCommands.filter(function (c) {
+      return ("/" + c.name).indexOf(filter) === 0;
+    });
+    if (matches.length === 0) { slashHideMenu(); return; }
+    slashMenuItems = matches;
+    slashMenuIdx = 0;
+
+    if (!slashMenuEl) {
+      slashMenuEl = document.createElement("div");
+      slashMenuEl.className = "slash-menu";
+    }
+    while (slashMenuEl.firstChild) slashMenuEl.removeChild(slashMenuEl.firstChild);
+    matches.forEach(function (cmd, i) {
+      var item = document.createElement("div");
+      item.className = "slash-menu-item" + (i === 0 ? " active" : "");
+      var nameSpan = document.createElement("span");
+      nameSpan.className = "slash-name";
+      nameSpan.textContent = "/" + cmd.name;
+      var descSpan = document.createElement("span");
+      descSpan.className = "slash-desc";
+      descSpan.textContent = cmd.description;
+      item.appendChild(nameSpan);
+      item.appendChild(descSpan);
+      item.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        slashSelectItem(i);
+      });
+      slashMenuEl.appendChild(item);
+    });
+
+    var inputWrap = chatInput.parentElement;
+    if (inputWrap && !slashMenuEl.parentElement) {
+      inputWrap.style.position = "relative";
+      inputWrap.appendChild(slashMenuEl);
+    }
+  }
+
+  function slashHideMenu() {
+    if (slashMenuEl && slashMenuEl.parentElement) {
+      slashMenuEl.parentElement.removeChild(slashMenuEl);
+    }
+    slashMenuItems = [];
+    slashMenuIdx = 0;
+  }
+
+  function slashSelectItem(idx) {
+    if (!slashMenuItems[idx]) return;
+    chatInput.value = "/" + slashMenuItems[idx].name;
+    slashHideMenu();
+    sendChat();
+  }
+
+  function slashHandleInput() {
+    var val = chatInput.value;
+    if (val.indexOf("/") === 0 && val.indexOf(" ") === -1) {
+      slashShowMenu(val);
+    } else {
+      slashHideMenu();
+    }
+  }
+
+  function slashHandleKeydown(e) {
+    if (!slashMenuEl || !slashMenuEl.parentElement || slashMenuItems.length === 0) return false;
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      slashMenuIdx = (slashMenuIdx - 1 + slashMenuItems.length) % slashMenuItems.length;
+      slashUpdateActive();
+      return true;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      slashMenuIdx = (slashMenuIdx + 1) % slashMenuItems.length;
+      slashUpdateActive();
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      slashSelectItem(slashMenuIdx);
+      return true;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      slashHideMenu();
+      return true;
+    }
+    return false;
+  }
+
+  function slashUpdateActive() {
+    if (!slashMenuEl) return;
+    var items = slashMenuEl.querySelectorAll(".slash-menu-item");
+    items.forEach(function (el, i) {
+      el.classList.toggle("active", i === slashMenuIdx);
+    });
+  }
+
+  function ctxEl(tag, cls, text) {
+    var el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  function ctxRow(label, value, mono) {
+    var row = ctxEl("div", "ctx-row");
+    row.appendChild(ctxEl("span", "ctx-label", label));
+    row.appendChild(ctxEl("span", "ctx-value" + (mono ? " mono" : ""), value));
+    return row;
+  }
+
+  function ctxSection(title) {
+    var sec = ctxEl("div", "ctx-section");
+    sec.appendChild(ctxEl("div", "ctx-section-title", title));
+    return sec;
+  }
+
+  function renderContextCard(data) {
+    if (!chatMsgBox) return;
+    slashInjectStyles();
+
+    var card = ctxEl("div", "ctx-card");
+
+    // Header with icon
+    var header = ctxEl("div", "ctx-header");
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    var path1 = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    path1.setAttribute("cx", "12");
+    path1.setAttribute("cy", "12");
+    path1.setAttribute("r", "3");
+    var path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path2.setAttribute("d", "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z");
+    svg.appendChild(path1);
+    svg.appendChild(path2);
+    header.appendChild(svg);
+    header.appendChild(ctxEl("span", "ctx-header-title", "Context"));
+    card.appendChild(header);
+
+    // Session section
+    var sess = data.session || {};
+    var sessSection = ctxSection("Session");
+    sessSection.appendChild(ctxRow("Key", sess.key || "unknown", true));
+    sessSection.appendChild(ctxRow("Messages", String(sess.messageCount || 0)));
+    sessSection.appendChild(ctxRow("Model", sess.model || "default", true));
+    if (sess.label) sessSection.appendChild(ctxRow("Label", sess.label));
+    card.appendChild(sessSection);
+
+    // Project section
+    var proj = data.project;
+    var projSection = ctxSection("Project");
+    if (proj && proj !== null) {
+      projSection.appendChild(ctxRow("Name", proj.label || "(unnamed)"));
+      if (proj.directory) projSection.appendChild(ctxRow("Directory", proj.directory, true));
+      if (proj.systemPrompt) projSection.appendChild(ctxRow("System Prompt", proj.systemPrompt.length + " chars"));
+
+      var ctxFiles = proj.contextFiles || [];
+      if (ctxFiles.length > 0) {
+        var filesLabel = ctxEl("div", "ctx-section-title", "Context Files (" + ctxFiles.length + ")");
+        filesLabel.style.marginTop = "8px";
+        projSection.appendChild(filesLabel);
+        ctxFiles.forEach(function (f) {
+          var row = ctxEl("div", "ctx-file");
+          row.appendChild(ctxEl("span", "ctx-file-path", f.path));
+          row.appendChild(ctxEl("span", "ctx-file-size", formatBytes(f.size)));
+          projSection.appendChild(row);
+        });
+      }
+    } else {
+      projSection.appendChild(ctxEl("div", "ctx-empty", "No project bound to this session"));
+    }
+    card.appendChild(projSection);
+
+    // Tools section
+    var tools = data.tools || [];
+    var toolsSection = ctxSection("Tools");
+    if (tools.length > 0) {
+      var toolWrap = ctxEl("div", "");
+      toolWrap.style.cssText = "display:flex;flex-wrap:wrap;gap:0";
+      tools.forEach(function (t) {
+        var tag = ctxEl("span", "ctx-tag");
+        var dot = ctxEl("span", "ctx-tag-dot");
+        tag.appendChild(dot);
+        tag.appendChild(document.createTextNode(t.name));
+        tag.title = t.description;
+        toolWrap.appendChild(tag);
+      });
+      toolsSection.appendChild(toolWrap);
+    } else {
+      toolsSection.appendChild(ctxEl("div", "ctx-empty", "No tools registered"));
+    }
+    card.appendChild(toolsSection);
+
+    // Token Usage section
+    var tu = data.tokenUsage || {};
+    var tokenSection = ctxSection("Token Usage (estimated)");
+    tokenSection.appendChild(ctxRow("Conversation", formatTokens(tu.conversationTokens || 0)));
+    if (tu.contextFileTokens > 0) {
+      tokenSection.appendChild(ctxRow("Context Files", formatTokens(tu.contextFileTokens)));
+    }
+    if (tu.systemPromptTokens > 0) {
+      tokenSection.appendChild(ctxRow("System Prompt", formatTokens(tu.systemPromptTokens)));
+    }
+    tokenSection.appendChild(ctxRow("Total", formatTokens(tu.estimatedTotal || 0), true));
+    card.appendChild(tokenSection);
+
+    chatMsgBox.appendChild(card);
+    chatMsgBox.scrollTop = chatMsgBox.scrollHeight;
+  }
+
+  function formatBytes(b) {
+    if (b >= 1024) return (b / 1024).toFixed(1) + " KB";
+    return b + " B";
+  }
+
+  function formatTokens(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+    if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+    return String(n);
+  }
+
   var chatBatchLoading = false;
 
   // Scroll chat to bottom and keep it pinned until layout settles.
@@ -1397,6 +1667,52 @@
   function sendChat() {
     var text = chatInput.value.trim();
     if (!text || !connected) return;
+
+    // Slash command dispatch
+    if (text.charAt(0) === "/") {
+      var cmdName = text.substring(1).toLowerCase();
+      var matched = slashCommands.find(function (c) { return c.name === cmdName; });
+      if (matched) {
+        chatInput.value = "";
+        chatAutoResize();
+        slashHideMenu();
+        if (cmdName === "clear") {
+          sendRpc("chat.clear", {}).then(function (res) {
+            if (res && res.ok) {
+              if (chatMsgBox) chatMsgBox.textContent = "";
+              sessionTokens = { input: 0, output: 0 };
+              updateTokenBar();
+              bumpSessionCount(activeSessionKey, 0);
+            } else {
+              chatAddMsg("error", (res && res.error && res.error.message) || "Clear failed");
+            }
+          });
+        } else if (cmdName === "compact") {
+          chatAddMsg("system", "Compacting conversation\u2026");
+          sendRpc("chat.compact", {}).then(function (res) {
+            if (res && res.ok) {
+              switchSession(activeSessionKey);
+            } else {
+              chatAddMsg("error", (res && res.error && res.error.message) || "Compact failed");
+            }
+          });
+        } else if (cmdName === "context") {
+          chatAddMsg("system", "Loading context\u2026");
+          sendRpc("chat.context", {}).then(function (res) {
+            // Remove the "Loading context..." message
+            if (chatMsgBox && chatMsgBox.lastChild) chatMsgBox.removeChild(chatMsgBox.lastChild);
+            if (res && res.ok && res.payload) {
+              try { renderContextCard(res.payload); }
+              catch (err) { chatAddMsg("error", "Render error: " + err.message); }
+            } else {
+              chatAddMsg("error", (res && res.error && res.error.message) || "Context failed");
+            }
+          });
+        }
+        return;
+      }
+    }
+
     chatHistory.push(text);
     if (chatHistory.length > 200) chatHistory = chatHistory.slice(-200);
     localStorage.setItem("moltis-chat-history", JSON.stringify(chatHistory));
@@ -1511,8 +1827,9 @@
       switchSession(activeSessionKey);
     }
 
-    chatInput.addEventListener("input", chatAutoResize);
+    chatInput.addEventListener("input", function () { chatAutoResize(); slashHandleInput(); });
     chatInput.addEventListener("keydown", function (e) {
+      if (slashHandleKeydown(e)) return;
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); return; }
       if (e.key === "ArrowUp" && chatInput.selectionStart === 0 && !e.shiftKey) {
         if (chatHistory.length === 0) return;
@@ -1546,6 +1863,7 @@
     if (connected) switchSession(activeSessionKey);
     chatInput.focus();
   }, function teardownChat() {
+    slashHideMenu();
     chatMsgBox = null;
     chatInput = null;
     chatSendBtn = null;

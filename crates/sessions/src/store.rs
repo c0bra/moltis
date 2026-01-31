@@ -216,6 +216,34 @@ impl SessionStore {
         .await?
     }
 
+    /// Replace the entire session history with the given messages.
+    pub async fn replace_history(&self, key: &str, messages: Vec<serde_json::Value>) -> Result<()> {
+        let path = self.path_for(key);
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&path)?;
+            let mut lock = RwLock::new(file);
+            let mut guard = lock
+                .try_write()
+                .map_err(|e| anyhow::anyhow!("lock failed: {e}"))?;
+            for msg in &messages {
+                let line = serde_json::to_string(msg)?;
+                writeln!(*guard, "{line}")?;
+            }
+            Ok(())
+        })
+        .await??;
+
+        Ok(())
+    }
+
     /// Count messages in a session file without parsing them.
     pub async fn count(&self, key: &str) -> Result<u32> {
         let path = self.path_for(key);
@@ -425,6 +453,41 @@ mod tests {
 
         let results = store.search("common", 3).await.unwrap();
         assert!(results.len() <= 3);
+    }
+
+    #[tokio::test]
+    async fn test_replace_history() {
+        let (store, _dir) = temp_store();
+
+        store
+            .append("main", &json!({"role": "user", "content": "hello"}))
+            .await
+            .unwrap();
+        store
+            .append("main", &json!({"role": "assistant", "content": "hi"}))
+            .await
+            .unwrap();
+        assert_eq!(store.read("main").await.unwrap().len(), 2);
+
+        let new_history = vec![json!({"role": "assistant", "content": "summary"})];
+        store.replace_history("main", new_history).await.unwrap();
+
+        let msgs = store.read("main").await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["content"], "summary");
+    }
+
+    #[tokio::test]
+    async fn test_replace_history_empty() {
+        let (store, _dir) = temp_store();
+
+        store
+            .append("main", &json!({"role": "user", "content": "hello"}))
+            .await
+            .unwrap();
+
+        store.replace_history("main", vec![]).await.unwrap();
+        assert!(store.read("main").await.unwrap().is_empty());
     }
 
     #[tokio::test]

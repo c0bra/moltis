@@ -372,6 +372,236 @@ impl ChatService for LiveChatService {
     async fn inject(&self, _params: Value) -> ServiceResult {
         Err("inject not yet implemented".into())
     }
+
+    async fn clear(&self, params: Value) -> ServiceResult {
+        let conn_id = params
+            .get("_conn_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let session_key = self.session_key_for(conn_id.as_deref()).await;
+
+        self.session_store
+            .clear(&session_key)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Reset metadata message count.
+        self.session_metadata.touch(&session_key, 0).await;
+
+        info!(session = %session_key, "chat.clear");
+        Ok(serde_json::json!({ "ok": true }))
+    }
+
+    async fn compact(&self, params: Value) -> ServiceResult {
+        let conn_id = params
+            .get("_conn_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let session_key = self.session_key_for(conn_id.as_deref()).await;
+
+        let history = self
+            .session_store
+            .read(&session_key)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if history.is_empty() {
+            return Err("nothing to compact".into());
+        }
+
+        // Build a summary prompt from the conversation.
+        let mut summary_messages: Vec<serde_json::Value> = Vec::new();
+        summary_messages.push(serde_json::json!({
+            "role": "system",
+            "content": "You are a conversation summarizer. Summarize the following conversation into a concise form that preserves all key facts, decisions, and context. Output only the summary, no preamble."
+        }));
+
+        let mut conversation_text = String::new();
+        for msg in &history {
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            conversation_text.push_str(&format!("{role}: {content}\n\n"));
+        }
+        summary_messages.push(serde_json::json!({
+            "role": "user",
+            "content": conversation_text,
+        }));
+
+        // Use the first available provider to generate the summary.
+        let provider = {
+            let reg = self.providers.read().await;
+            reg.first()
+                .ok_or_else(|| "no LLM providers configured".to_string())?
+        };
+
+        info!(session = %session_key, messages = history.len(), "chat.compact: summarizing");
+
+        let mut stream = provider.stream(summary_messages);
+        let mut summary = String::new();
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::Delta(delta) => summary.push_str(&delta),
+                StreamEvent::Done(_) => break,
+                StreamEvent::Error(e) => return Err(format!("compact summarization failed: {e}")),
+            }
+        }
+
+        if summary.is_empty() {
+            return Err("compact produced empty summary".into());
+        }
+
+        // Replace history with a single assistant message containing the summary.
+        let compacted = vec![serde_json::json!({
+            "role": "assistant",
+            "content": format!("[Conversation Summary]\n\n{summary}"),
+        })];
+
+        self.session_store
+            .replace_history(&session_key, compacted.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+
+        self.session_metadata.touch(&session_key, 1).await;
+
+        info!(session = %session_key, "chat.compact: done");
+        Ok(serde_json::json!(compacted))
+    }
+
+    async fn context(&self, params: Value) -> ServiceResult {
+        let conn_id = params
+            .get("_conn_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let session_key = self.session_key_for(conn_id.as_deref()).await;
+
+        // Session info
+        let message_count = self.session_store.count(&session_key).await.unwrap_or(0);
+        let session_entry = self.session_metadata.get(&session_key).await;
+        let session_info = serde_json::json!({
+            "key": session_key,
+            "messageCount": message_count,
+            "model": session_entry.as_ref().and_then(|e| e.model.as_deref()),
+            "label": session_entry.as_ref().and_then(|e| e.label.as_deref()),
+            "projectId": session_entry.as_ref().and_then(|e| e.project_id.as_deref()),
+        });
+
+        // Project info & context files
+        let project_id = if let Some(cid) = conn_id.as_deref() {
+            let projects = self.state.active_projects.read().await;
+            projects.get(cid).cloned()
+        } else {
+            None
+        };
+        let project_id =
+            project_id.or_else(|| session_entry.as_ref().and_then(|e| e.project_id.clone()));
+
+        let project_info = if let Some(pid) = project_id {
+            match self
+                .state
+                .services
+                .project
+                .get(serde_json::json!({"id": pid}))
+                .await
+            {
+                Ok(val) => {
+                    let dir = val.get("directory").and_then(|v| v.as_str());
+                    let context_files = if let Some(d) = dir {
+                        match moltis_projects::context::load_context_files(std::path::Path::new(d))
+                        {
+                            Ok(files) => files
+                                .iter()
+                                .map(|f| {
+                                    serde_json::json!({
+                                        "path": f.path.display().to_string(),
+                                        "size": f.content.len(),
+                                    })
+                                })
+                                .collect::<Vec<_>>(),
+                            Err(_) => vec![],
+                        }
+                    } else {
+                        vec![]
+                    };
+                    serde_json::json!({
+                        "id": val.get("id"),
+                        "label": val.get("label"),
+                        "directory": dir,
+                        "systemPrompt": val.get("system_prompt").or(val.get("systemPrompt")),
+                        "contextFiles": context_files,
+                    })
+                },
+                Err(_) => serde_json::json!(null),
+            }
+        } else {
+            serde_json::json!(null)
+        };
+
+        // Tools
+        let tool_schemas = self.tool_registry.list_schemas();
+        let tools: Vec<_> = tool_schemas
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "description": s.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                })
+            })
+            .collect();
+
+        // Estimate context token usage
+        let messages = self
+            .session_store
+            .read(&session_key)
+            .await
+            .unwrap_or_default();
+        let conversation_tokens: usize = messages
+            .iter()
+            .map(|m| {
+                let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                content.split_whitespace().count().max(1)
+            })
+            .sum();
+
+        // Context files token estimate
+        let context_file_tokens: usize = if let Some(files) = project_info.get("contextFiles") {
+            files
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|f| f.get("size").and_then(|v| v.as_u64()).unwrap_or(0) as usize)
+                        .sum::<usize>()
+                        / 4
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        // System prompt token estimate
+        let system_prompt_tokens: usize = project_info
+            .get("systemPrompt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.split_whitespace().count())
+            .unwrap_or(0);
+
+        let total_estimated_tokens =
+            conversation_tokens + context_file_tokens + system_prompt_tokens;
+
+        Ok(serde_json::json!({
+            "session": session_info,
+            "project": project_info,
+            "tools": tools,
+            "tokenUsage": {
+                "conversationTokens": conversation_tokens,
+                "contextFileTokens": context_file_tokens,
+                "systemPromptTokens": system_prompt_tokens,
+                "estimatedTotal": total_estimated_tokens,
+            },
+        }))
+    }
 }
 
 // ── Agent loop mode ─────────────────────────────────────────────────────────

@@ -206,6 +206,9 @@ pub trait ChatService: Send + Sync {
     async fn abort(&self, params: Value) -> ServiceResult;
     async fn history(&self, params: Value) -> ServiceResult;
     async fn inject(&self, params: Value) -> ServiceResult;
+    async fn clear(&self, params: Value) -> ServiceResult;
+    async fn compact(&self, params: Value) -> ServiceResult;
+    async fn context(&self, params: Value) -> ServiceResult;
 }
 
 pub struct NoopChatService;
@@ -226,6 +229,18 @@ impl ChatService for NoopChatService {
 
     async fn inject(&self, _p: Value) -> ServiceResult {
         Err("chat not configured".into())
+    }
+
+    async fn clear(&self, _p: Value) -> ServiceResult {
+        Err("chat not configured".into())
+    }
+
+    async fn compact(&self, _p: Value) -> ServiceResult {
+        Err("chat not configured".into())
+    }
+
+    async fn context(&self, _p: Value) -> ServiceResult {
+        Ok(serde_json::json!({ "session": {}, "project": null, "tools": [], "providers": [] }))
     }
 }
 

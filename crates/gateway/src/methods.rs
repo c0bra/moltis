@@ -62,6 +62,7 @@ const READ_METHODS: &[&str] = &[
     "node.list",
     "node.describe",
     "chat.history",
+    "chat.context",
     "providers.available",
     "providers.oauth.status",
 ];
@@ -80,6 +81,8 @@ const WRITE_METHODS: &[&str] = &[
     "node.invoke",
     "chat.send",
     "chat.abort",
+    "chat.clear",
+    "chat.compact",
     "browser.request",
     "providers.save_key",
     "providers.remove_key",
@@ -1341,6 +1344,52 @@ impl MethodRegistry {
                         .chat()
                         .await
                         .inject(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "chat.clear",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let mut params = ctx.params.clone();
+                    params["_conn_id"] = serde_json::json!(ctx.client_conn_id);
+                    ctx.state
+                        .chat()
+                        .await
+                        .clear(params)
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "chat.compact",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let mut params = ctx.params.clone();
+                    params["_conn_id"] = serde_json::json!(ctx.client_conn_id);
+                    ctx.state
+                        .chat()
+                        .await
+                        .compact(params)
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+
+        self.register(
+            "chat.context",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let mut params = ctx.params.clone();
+                    params["_conn_id"] = serde_json::json!(ctx.client_conn_id);
+                    ctx.state
+                        .chat()
+                        .await
+                        .context(params)
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
                 })
