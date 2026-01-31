@@ -108,10 +108,10 @@ enum SkillAction {
         /// Source in owner/repo format (e.g. vercel-labs/agent-skills).
         source: String,
     },
-    /// Remove an installed skill.
+    /// Remove an installed repo and all its skills.
     Remove {
-        /// Skill name to remove.
-        name: String,
+        /// Source in owner/repo format.
+        source: String,
     },
     /// Show details about a skill.
     Info {
@@ -215,13 +215,15 @@ async fn handle_skills(action: SkillAction) -> anyhow::Result<()> {
         },
         SkillAction::Add { source } => {
             let install_dir = install::default_install_dir()?;
-            let meta = install::install_skill(&source, &install_dir).await?;
-            println!("Installed skill '{}': {}", meta.name, meta.description);
+            let skills = install::install_skill(&source, &install_dir).await?;
+            for meta in &skills {
+                println!("Installed skill '{}': {}", meta.name, meta.description);
+            }
         },
-        SkillAction::Remove { name } => {
-            let registry = InMemoryRegistry::from_discoverer(&discoverer).await?;
-            registry.remove_skill(&name).await?;
-            println!("Removed skill '{name}'.");
+        SkillAction::Remove { source } => {
+            let install_dir = install::default_install_dir()?;
+            install::remove_repo(&source, &install_dir).await?;
+            println!("Removed repo '{source}' and all its skills.");
         },
         SkillAction::Info { name } => {
             let registry = InMemoryRegistry::from_discoverer(&discoverer).await?;

@@ -5,6 +5,7 @@
 
 pub mod discover;
 pub mod install;
+pub mod manifest;
 pub mod parse;
 pub mod prompt_gen;
 pub mod registry;

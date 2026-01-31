@@ -3398,18 +3398,221 @@
     desc.textContent = "SKILL.md-based skills discovered from project, personal, and installed paths.";
     wrapper.appendChild(desc);
 
+    // ── Toast notification ──
+    var toastContainer = document.createElement("div");
+    toastContainer.style.cssText = "position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;";
+    document.body.appendChild(toastContainer);
+
+    function showToast(message, type) {
+      var bgColor = type === "error" ? "var(--error, #e55)" : "var(--accent)";
+      var toast = document.createElement("div");
+      toast.style.cssText = "pointer-events:auto;max-width:420px;padding:10px 16px;border-radius:6px;font-size:.8rem;font-weight:500;color:#fff;background:" + bgColor + ";box-shadow:0 4px 12px rgba(0,0,0,.15);opacity:0;transform:translateY(-8px);transition:opacity .2s,transform .2s;";
+      toast.textContent = message;
+      toastContainer.appendChild(toast);
+      requestAnimationFrame(function () {
+        toast.style.opacity = "1";
+        toast.style.transform = "translateY(0)";
+      });
+      setTimeout(function () {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(-8px)";
+        setTimeout(function () { toast.remove(); }, 200);
+      }, 4000);
+    }
+
+    // ── Install form ──
+    var installBox = document.createElement("div");
+    installBox.style.cssText = "display:flex;gap:8px;align-items:center;";
+    var installInput = document.createElement("input");
+    installInput.type = "text";
+    installInput.placeholder = "owner/repo (e.g. anthropics/skills)";
+    installInput.style.cssText = "flex:1;max-width:360px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:.82rem;font-family:var(--font-mono);";
+    var installBtn = document.createElement("button");
+    installBtn.textContent = "Install";
+    installBtn.style.cssText = "background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);font-size:.78rem;padding:6px 14px;cursor:pointer;font-weight:500;";
+    installBox.appendChild(installInput);
+    installBox.appendChild(installBtn);
+    wrapper.appendChild(installBox);
+
+    function doInstall(source, btn) {
+      if (!source) return;
+      if (!connected) { showToast("Not connected to gateway.", "error"); return; }
+      var origText = btn.textContent;
+      btn.textContent = "Installing\u2026";
+      btn.disabled = true;
+      btn.style.opacity = ".6";
+      sendRpc("skills.install", { source: source }).then(function (res) {
+        btn.textContent = origText;
+        btn.disabled = false;
+        btn.style.opacity = "";
+        if (res && res.ok) {
+          var p = res.payload || {};
+          var count = (p.installed || []).length;
+          showToast("Installed " + source + " (" + count + " skill" + (count !== 1 ? "s" : "") + ")", "success");
+          fetchAll();
+        } else {
+          showToast("Failed: " + (res && res.error || "unknown error"), "error");
+        }
+      });
+    }
+
+    installBtn.addEventListener("click", function () {
+      doInstall(installInput.value.trim(), installBtn);
+    });
+    installInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") doInstall(installInput.value.trim(), installBtn);
+    });
+
+    // ── Featured skills ──
+    var featuredSkills = [
+      { repo: "anthropics/skills", desc: "Official Anthropic agent skills" },
+      { repo: "vercel-labs/agent-skills", desc: "Vercel agent skills collection" },
+      { repo: "vercel-labs/skills", desc: "Vercel skills toolkit" },
+    ];
+    var featuredSection = document.createElement("div");
+    featuredSection.style.cssText = "display:flex;flex-direction:column;gap:8px;";
+    var featuredTitle = document.createElement("h3");
+    featuredTitle.style.cssText = "font-size:.82rem;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:0;";
+    featuredTitle.textContent = "Featured Skills";
+    featuredSection.appendChild(featuredTitle);
+
+    var featuredGrid = document.createElement("div");
+    featuredGrid.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;";
+    featuredSkills.forEach(function (f) {
+      var card = document.createElement("div");
+      card.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);";
+      var info = document.createElement("div");
+      var repoName = document.createElement("span");
+      repoName.style.cssText = "font-family:var(--font-mono);font-size:.82rem;font-weight:500;color:var(--text-strong);";
+      repoName.textContent = f.repo;
+      var repoDesc = document.createElement("div");
+      repoDesc.style.cssText = "font-size:.75rem;color:var(--muted);";
+      repoDesc.textContent = f.desc;
+      info.appendChild(repoName);
+      info.appendChild(repoDesc);
+      card.appendChild(info);
+      var btn = document.createElement("button");
+      btn.textContent = "Install";
+      btn.style.cssText = "background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-size:.72rem;padding:4px 10px;cursor:pointer;white-space:nowrap;";
+      btn.addEventListener("click", function () { doInstall(f.repo, btn); });
+      card.appendChild(btn);
+      featuredGrid.appendChild(card);
+    });
+    featuredSection.appendChild(featuredGrid);
+    wrapper.appendChild(featuredSection);
+
+    // ── Repositories section ──
+    var reposSection = document.createElement("div");
+    reposSection.style.cssText = "display:flex;flex-direction:column;gap:8px;";
+    var reposTitle = document.createElement("h3");
+    reposTitle.style.cssText = "font-size:.82rem;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:0;";
+    reposTitle.textContent = "Installed Repositories";
+    reposSection.appendChild(reposTitle);
+    var reposWrap = document.createElement("div");
+    reposWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;";
+    reposSection.appendChild(reposWrap);
+    wrapper.appendChild(reposSection);
+
+    // ── Enabled skills table ──
+    var skillsTitle = document.createElement("h3");
+    skillsTitle.style.cssText = "font-size:.82rem;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:0;";
+    skillsTitle.textContent = "Enabled Skills";
+    wrapper.appendChild(skillsTitle);
     var tableWrap = document.createElement("div");
     tableWrap.style.cssText = "border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;";
     wrapper.appendChild(tableWrap);
 
     container.appendChild(wrapper);
 
+    function renderRepos(repos) {
+      reposWrap.textContent = "";
+      if (!repos || repos.length === 0) {
+        var empty = document.createElement("div");
+        empty.style.cssText = "padding:12px;color:var(--muted);font-size:.82rem;";
+        empty.textContent = "No repositories installed.";
+        reposWrap.appendChild(empty);
+        return;
+      }
+      repos.forEach(function (repo) {
+        var card = document.createElement("div");
+        card.style.cssText = "border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);overflow:hidden;";
+
+        // Repo header row
+        var hdr = document.createElement("div");
+        hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:10px 12px;cursor:pointer;";
+        var hdrLeft = document.createElement("div");
+        hdrLeft.style.cssText = "display:flex;align-items:center;gap:8px;";
+        var arrow = document.createElement("span");
+        arrow.textContent = "\u25B6";
+        arrow.style.cssText = "font-size:.65rem;color:var(--muted);transition:transform .15s;";
+        var repoName = document.createElement("span");
+        repoName.style.cssText = "font-family:var(--font-mono);font-size:.82rem;font-weight:500;color:var(--text-strong);";
+        repoName.textContent = repo.source;
+        var skillCount = document.createElement("span");
+        skillCount.style.cssText = "font-size:.72rem;color:var(--muted);";
+        var enabledCount = (repo.skills || []).filter(function (s) { return s.enabled; }).length;
+        skillCount.textContent = enabledCount + "/" + (repo.skills || []).length + " enabled";
+        hdrLeft.appendChild(arrow);
+        hdrLeft.appendChild(repoName);
+        hdrLeft.appendChild(skillCount);
+        hdr.appendChild(hdrLeft);
+
+        var rmBtn = document.createElement("button");
+        rmBtn.textContent = "Remove Repo";
+        rmBtn.style.cssText = "background:none;border:1px solid var(--border);color:var(--error, #e55);border-radius:var(--radius-sm);font-size:.72rem;padding:3px 8px;cursor:pointer;";
+        rmBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (!connected) return;
+          sendRpc("skills.repos.remove", { source: repo.source }).then(function (res) {
+            if (res && res.ok) fetchAll();
+          });
+        });
+        hdr.appendChild(rmBtn);
+        card.appendChild(hdr);
+
+        // Skills detail (collapsed by default)
+        var detail = document.createElement("div");
+        detail.style.cssText = "display:none;border-top:1px solid var(--border);";
+        var expanded = false;
+        hdr.addEventListener("click", function () {
+          expanded = !expanded;
+          detail.style.display = expanded ? "block" : "none";
+          arrow.style.transform = expanded ? "rotate(90deg)" : "";
+        });
+
+        (repo.skills || []).forEach(function (skill) {
+          var row = document.createElement("div");
+          row.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:6px 12px 6px 32px;border-bottom:1px solid var(--border);";
+          var nameSpan = document.createElement("span");
+          nameSpan.style.cssText = "font-family:var(--font-mono);font-size:.8rem;color:var(--text);";
+          nameSpan.textContent = skill.name;
+          row.appendChild(nameSpan);
+
+          var toggle = document.createElement("button");
+          toggle.textContent = skill.enabled ? "Disable" : "Enable";
+          toggle.style.cssText = "background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.72rem;padding:2px 8px;cursor:pointer;color:" + (skill.enabled ? "var(--muted)" : "var(--accent)") + ";";
+          toggle.addEventListener("click", function () {
+            if (!connected) return;
+            var method = skill.enabled ? "skills.skill.disable" : "skills.skill.enable";
+            sendRpc(method, { source: repo.source, skill: skill.name }).then(function (res) {
+              if (res && res.ok) fetchAll();
+            });
+          });
+          row.appendChild(toggle);
+          detail.appendChild(row);
+        });
+
+        card.appendChild(detail);
+        reposWrap.appendChild(card);
+      });
+    }
+
     function renderSkills(skills) {
       tableWrap.textContent = "";
       if (!skills || skills.length === 0) {
         var empty = document.createElement("div");
         empty.style.cssText = "padding:24px;text-align:center;color:var(--muted);font-size:.85rem;";
-        empty.textContent = "No skills found. Add skills to .moltis/skills/ or install with: moltis skills add owner/repo";
+        empty.textContent = "No skills found. Install a skill above or add SKILL.md files to .moltis/skills/.";
         tableWrap.appendChild(empty);
         return;
       }
@@ -3418,7 +3621,7 @@
       var thead = document.createElement("thead");
       var headRow = document.createElement("tr");
       headRow.style.cssText = "border-bottom:1px solid var(--border);background:var(--surface);";
-      ["Name", "Description", "Source", "License", "Path"].forEach(function (h) {
+      ["Name", "Description", "Source", "License"].forEach(function (h) {
         var th = document.createElement("th");
         th.style.cssText = "text-align:left;padding:8px 12px;font-weight:500;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;";
         th.textContent = h;
@@ -3441,7 +3644,7 @@
 
         var descCell = document.createElement("td");
         descCell.style.cssText = "padding:8px 12px;color:var(--text);";
-        descCell.textContent = s.description || "—";
+        descCell.textContent = s.description || "\u2014";
         row.appendChild(descCell);
 
         var sourceCell = document.createElement("td");
@@ -3455,14 +3658,8 @@
 
         var licCell = document.createElement("td");
         licCell.style.cssText = "padding:8px 12px;color:var(--muted);font-size:.78rem;";
-        licCell.textContent = s.license || "—";
+        licCell.textContent = s.license || "\u2014";
         row.appendChild(licCell);
-
-        var pathCell = document.createElement("td");
-        pathCell.style.cssText = "padding:8px 12px;color:var(--muted);font-size:.75rem;font-family:var(--font-mono);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-        pathCell.title = s.path || "";
-        pathCell.textContent = s.path || "";
-        row.appendChild(pathCell);
 
         tbody.appendChild(row);
       });
@@ -3470,11 +3667,22 @@
       tableWrap.appendChild(table);
     }
 
+    function fetchAll() {
+      // Fetch repos
+      if (connected) {
+        sendRpc("skills.repos.list", {}).then(function (res) {
+          if (res && res.ok) renderRepos(res.payload || []);
+        });
+      }
+      // Fetch enabled skills
+      fetchSkills();
+    }
+
     function fetchSkills() {
       tableWrap.textContent = "";
       var loading = document.createElement("div");
       loading.style.cssText = "padding:24px;text-align:center;color:var(--muted);font-size:.85rem;";
-      loading.textContent = "Loading skills…";
+      loading.textContent = "Loading skills\u2026";
       tableWrap.appendChild(loading);
 
       if (!connected) {
@@ -3490,8 +3698,8 @@
       });
     }
 
-    refreshBtn.addEventListener("click", fetchSkills);
-    fetchSkills();
+    refreshBtn.addEventListener("click", fetchAll);
+    fetchAll();
   });
 
   // ── WebSocket ─────────────────────────────────────────────

@@ -1,25 +1,31 @@
 use std::path::{Path, PathBuf};
 
-use crate::{parse, types::SkillMetadata};
+use crate::{
+    manifest::ManifestStore,
+    parse,
+    types::{RepoEntry, SkillMetadata, SkillState},
+};
 
-/// Install a skill from a GitHub repository into the target directory.
+/// Install a skill repo from GitHub into the target directory.
 ///
-/// Tries `git clone --depth=1` first, falls back to HTTP tarball fetch.
-/// The `source` should be `owner/repo` format (e.g. `vercel-labs/agent-skills`).
-pub async fn install_skill(source: &str, install_dir: &Path) -> anyhow::Result<SkillMetadata> {
+/// Clones the entire repo to `install_dir/<repo>/` (kept intact), scans for
+/// `SKILL.md` files, and records the repo + skills in the manifest with all
+/// skills enabled by default.
+pub async fn install_skill(source: &str, install_dir: &Path) -> anyhow::Result<Vec<SkillMetadata>> {
     let (owner, repo) = parse_source(source)?;
-    let target = install_dir.join(&repo);
+    let dir_name = format!("{owner}-{repo}");
+    let target = install_dir.join(&dir_name);
 
     if target.exists() {
         anyhow::bail!(
-            "skill directory already exists: {}. Remove it first with `skills remove`.",
+            "repo directory already exists: {}. Remove it first with `skills remove`.",
             target.display()
         );
     }
 
     tokio::fs::create_dir_all(install_dir).await?;
 
-    // Try git clone first
+    // Try git clone first.
     let git_url = format!("https://github.com/{owner}/{repo}");
     let git_result = tokio::process::Command::new("git")
         .args(["clone", "--depth=1", &git_url, &target.to_string_lossy()])
@@ -28,20 +34,68 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> anyhow::Result<S
 
     match git_result {
         Ok(output) if output.status.success() => {
-            tracing::info!(%source, "installed skill via git clone");
+            tracing::info!(%source, "installed skill repo via git clone");
         },
         _ => {
-            // Fallback: HTTP fetch of the default branch tarball
-            return install_via_http(&owner, &repo, &target).await;
+            install_via_http(&owner, &repo, &target).await?;
         },
     }
 
-    // Validate the installed skill
-    validate_installed_skill(&target).await
+    // Scan for SKILL.md files and build manifest entry.
+    let (skills_meta, skill_states) = scan_repo_skills(&target, install_dir).await?;
+
+    if skills_meta.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&target).await;
+        anyhow::bail!(
+            "repository contains no SKILL.md files (checked {})",
+            target.display()
+        );
+    }
+
+    // Write manifest.
+    let manifest_path = ManifestStore::default_path()?;
+    let store = ManifestStore::new(manifest_path);
+    let mut manifest = store.load()?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    manifest.add_repo(RepoEntry {
+        source: source.to_string(),
+        repo_name: dir_name,
+        installed_at_ms: now,
+        skills: skill_states,
+    });
+    store.save(&manifest)?;
+
+    tracing::info!(count = skills_meta.len(), %source, "installed repo skills");
+    Ok(skills_meta)
+}
+
+/// Remove a repo: delete directory and manifest entry.
+pub async fn remove_repo(source: &str, install_dir: &Path) -> anyhow::Result<()> {
+    let manifest_path = ManifestStore::default_path()?;
+    let store = ManifestStore::new(manifest_path);
+    let mut manifest = store.load()?;
+
+    let repo = manifest
+        .find_repo(source)
+        .ok_or_else(|| anyhow::anyhow!("repo '{}' not found in manifest", source))?;
+    let dir = install_dir.join(&repo.repo_name);
+
+    if dir.exists() {
+        tokio::fs::remove_dir_all(&dir).await?;
+    }
+
+    manifest.remove_repo(source);
+    store.save(&manifest)?;
+    Ok(())
 }
 
 /// Install by fetching a tarball from GitHub's API.
-async fn install_via_http(owner: &str, repo: &str, target: &Path) -> anyhow::Result<SkillMetadata> {
+async fn install_via_http(owner: &str, repo: &str, target: &Path) -> anyhow::Result<()> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}/tarball");
     let client = reqwest::Client::new();
     let resp = client
@@ -56,17 +110,14 @@ async fn install_via_http(owner: &str, repo: &str, target: &Path) -> anyhow::Res
 
     let bytes = resp.bytes().await?;
 
-    // Extract tarball to target
     tokio::fs::create_dir_all(target).await?;
     let target_owned = target.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let decoder = flate2::read::GzDecoder::new(&bytes[..]);
         let mut archive = tar::Archive::new(decoder);
-        // GitHub tarballs have a top-level directory; strip it
         for entry in archive.entries()? {
             let mut entry = entry?;
             let path = entry.path()?.into_owned();
-            // Strip the first component (e.g. "owner-repo-sha/")
             let stripped: PathBuf = path.components().skip(1).collect();
             if stripped.as_os_str().is_empty() {
                 continue;
@@ -81,33 +132,88 @@ async fn install_via_http(owner: &str, repo: &str, target: &Path) -> anyhow::Res
     })
     .await??;
 
-    tracing::info!(%owner, %repo, "installed skill via HTTP tarball");
-    validate_installed_skill(target).await
+    tracing::info!(%owner, %repo, "installed skill repo via HTTP tarball");
+    Ok(())
 }
 
-/// Validate that a SKILL.md exists and parses correctly in the installed directory.
-async fn validate_installed_skill(skill_dir: &Path) -> anyhow::Result<SkillMetadata> {
-    let skill_md = skill_dir.join("SKILL.md");
-    if !skill_md.exists() {
-        // Clean up
-        let _ = tokio::fs::remove_dir_all(skill_dir).await;
-        anyhow::bail!(
-            "installed repository does not contain a SKILL.md at {}",
-            skill_md.display()
-        );
+/// Recursively scan a cloned repo for SKILL.md files.
+/// Returns (Vec<SkillMetadata>, Vec<SkillState>) — metadata for callers and
+/// state entries for the manifest.
+async fn scan_repo_skills(
+    repo_dir: &Path,
+    install_dir: &Path,
+) -> anyhow::Result<(Vec<SkillMetadata>, Vec<SkillState>)> {
+    // Check root SKILL.md (single-skill repo).
+    let root_skill_md = repo_dir.join("SKILL.md");
+    if root_skill_md.is_file() {
+        let content = tokio::fs::read_to_string(&root_skill_md).await?;
+        let mut meta = parse::parse_metadata(&content, repo_dir)?;
+        meta.source = Some(crate::types::SkillSource::Registry);
+
+        let relative = repo_dir
+            .strip_prefix(install_dir)
+            .unwrap_or(repo_dir)
+            .to_string_lossy()
+            .to_string();
+
+        let state = SkillState {
+            name: meta.name.clone(),
+            relative_path: relative,
+            enabled: false,
+        };
+        return Ok((vec![meta], vec![state]));
     }
 
-    let content = tokio::fs::read_to_string(&skill_md).await?;
-    match parse::parse_metadata(&content, skill_dir) {
-        Ok(mut meta) => {
-            meta.source = Some(crate::types::SkillSource::Registry);
-            Ok(meta)
-        },
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(skill_dir).await;
-            Err(e)
-        },
+    // Multi-skill: recursively scan for SKILL.md.
+    let mut skills_meta = Vec::new();
+    let mut skill_states = Vec::new();
+    let mut dirs_to_scan = vec![repo_dir.to_path_buf()];
+
+    while let Some(dir) = dirs_to_scan.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let subdir = entry.path();
+            if !subdir.is_dir() {
+                continue;
+            }
+            let skill_md = subdir.join("SKILL.md");
+            if skill_md.is_file() {
+                let content = match tokio::fs::read_to_string(&skill_md).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(?skill_md, %e, "failed to read SKILL.md");
+                        continue;
+                    },
+                };
+                match parse::parse_metadata(&content, &subdir) {
+                    Ok(mut meta) => {
+                        meta.source = Some(crate::types::SkillSource::Registry);
+                        let relative = subdir
+                            .strip_prefix(install_dir)
+                            .unwrap_or(&subdir)
+                            .to_string_lossy()
+                            .to_string();
+                        skill_states.push(SkillState {
+                            name: meta.name.clone(),
+                            relative_path: relative,
+                            enabled: false,
+                        });
+                        skills_meta.push(meta);
+                    },
+                    Err(e) => {
+                        tracing::warn!(?skill_md, %e, "failed to parse SKILL.md");
+                    },
+                }
+            } else {
+                dirs_to_scan.push(subdir);
+            }
+        }
     }
+
+    Ok((skills_meta, skill_states))
 }
 
 /// Parse `owner/repo` from a source string.
@@ -146,5 +252,49 @@ mod tests {
         assert!(parse_source("too/many/parts").is_err());
         assert!(parse_source("/empty-owner").is_err());
         assert!(parse_source("empty-repo/").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_scan_single_skill_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_dir = tmp.path();
+        let repo_dir = install_dir.join("my-repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        std::fs::write(
+            repo_dir.join("SKILL.md"),
+            "---\nname: single\ndescription: test\n---\nbody\n",
+        )
+        .unwrap();
+
+        let (meta, states) = scan_repo_skills(&repo_dir, install_dir).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].name, "single");
+        assert_eq!(states.len(), 1);
+        assert!(!states[0].enabled);
+        assert_eq!(states[0].relative_path, "my-repo");
+    }
+
+    #[tokio::test]
+    async fn test_scan_multi_skill_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_dir = tmp.path();
+        let repo_dir = install_dir.join("multi");
+        std::fs::create_dir_all(repo_dir.join("skills/a")).unwrap();
+        std::fs::create_dir_all(repo_dir.join("skills/b")).unwrap();
+        std::fs::write(
+            repo_dir.join("skills/a/SKILL.md"),
+            "---\nname: skill-a\ndescription: A\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_dir.join("skills/b/SKILL.md"),
+            "---\nname: skill-b\ndescription: B\n---\nbody\n",
+        )
+        .unwrap();
+
+        let (meta, states) = scan_repo_skills(&repo_dir, install_dir).await.unwrap();
+        assert_eq!(meta.len(), 2);
+        assert_eq!(states.len(), 2);
+        assert!(states.iter().all(|s| !s.enabled));
     }
 }

@@ -2,6 +2,72 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+// ── Skills manifest ──────────────────────────────────────────────────────────
+
+/// Top-level manifest tracking installed repos and per-skill enabled state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillsManifest {
+    pub version: u32,
+    #[serde(default)]
+    pub repos: Vec<RepoEntry>,
+}
+
+impl Default for SkillsManifest {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            repos: Vec::new(),
+        }
+    }
+}
+
+impl SkillsManifest {
+    pub fn add_repo(&mut self, entry: RepoEntry) {
+        self.repos.push(entry);
+    }
+
+    pub fn remove_repo(&mut self, source: &str) {
+        self.repos.retain(|r| r.source != source);
+    }
+
+    pub fn find_repo(&self, source: &str) -> Option<&RepoEntry> {
+        self.repos.iter().find(|r| r.source == source)
+    }
+
+    pub fn find_repo_mut(&mut self, source: &str) -> Option<&mut RepoEntry> {
+        self.repos.iter_mut().find(|r| r.source == source)
+    }
+
+    pub fn set_skill_enabled(&mut self, source: &str, skill_name: &str, enabled: bool) -> bool {
+        if let Some(repo) = self.find_repo_mut(source)
+            && let Some(skill) = repo.skills.iter_mut().find(|s| s.name == skill_name)
+        {
+            skill.enabled = enabled;
+            return true;
+        }
+        false
+    }
+}
+
+/// A single cloned repository with its discovered skills.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoEntry {
+    pub source: String,
+    pub repo_name: String,
+    pub installed_at_ms: u64,
+    pub skills: Vec<SkillState>,
+}
+
+/// Per-skill enabled state within a repo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillState {
+    pub name: String,
+    pub relative_path: String,
+    pub enabled: bool,
+}
+
+// ── Skill metadata ───────────────────────────────────────────────────────────
+
 /// Where a skill was discovered from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
