@@ -431,15 +431,23 @@
               // already shown in the exec card.
               var isEcho = lastToolOutput && p.text
                 && p.text.replace(/[`\s]/g, "").indexOf(lastToolOutput.replace(/\s/g, "").substring(0, 80)) !== -1;
+              var msgEl = null;
               if (!isEcho) {
                 if (p.text && streamEl) {
                   // Safe: renderMarkdown calls esc() first to escape all HTML entities
                   streamEl.innerHTML = renderMarkdown(p.text);
+                  msgEl = streamEl;
                 } else if (p.text && !streamEl) {
-                  addMsg("assistant", renderMarkdown(p.text), true);
+                  msgEl = addMsg("assistant", renderMarkdown(p.text), true);
                 }
               } else if (streamEl) {
                 streamEl.remove();
+              }
+              if (msgEl && p.model) {
+                var footer = document.createElement("div");
+                footer.className = "msg-model-footer";
+                footer.textContent = p.provider ? p.provider + " / " + p.model : p.model;
+                msgEl.appendChild(footer);
               }
               streamEl = null;
               streamText = "";
@@ -988,7 +996,7 @@
     el.textContent = next + " msg" + (next !== 1 ? "s" : "");
   }
 
-  function switchSession(key) {
+  function switchSession(key, searchContext) {
     activeSessionKey = key;
     localStorage.setItem("moltis-session", key);
     msgBox.textContent = "";
@@ -1005,13 +1013,22 @@
     sendRpc("sessions.switch", { key: key }).then(function (res) {
       if (res && res.ok && res.payload) {
         var history = res.payload.history || [];
+        var msgEls = [];
         history.forEach(function (msg) {
           if (msg.role === "user") {
-            addMsg("user", renderMarkdown(msg.content || ""), true);
+            msgEls.push(addMsg("user", renderMarkdown(msg.content || ""), true));
           } else if (msg.role === "assistant") {
-            addMsg("assistant", renderMarkdown(msg.content || ""), true);
+            msgEls.push(addMsg("assistant", renderMarkdown(msg.content || ""), true));
+          } else {
+            msgEls.push(null);
           }
         });
+
+        // Scroll to matched message and highlight search terms.
+        if (searchContext && searchContext.query) {
+          highlightAndScroll(msgEls, searchContext.messageIndex, searchContext.query);
+        }
+
         // Show thinking dots if this session is still waiting for a response.
         var item = sessionList.querySelector('.session-item[data-session-key="' + key + '"]');
         if (item && item.classList.contains("replying")) {
@@ -1033,6 +1050,211 @@
       }
     });
   }
+
+  function highlightAndScroll(msgEls, messageIndex, query) {
+    // Find the target message element. messageIndex is the JSONL line index,
+    // but msgEls only includes user/assistant messages. We use it as a hint
+    // and fall back to the first element containing the query.
+    var target = null;
+
+    // Try exact index first.
+    if (messageIndex >= 0 && messageIndex < msgEls.length && msgEls[messageIndex]) {
+      target = msgEls[messageIndex];
+    }
+
+    // If the target doesn't contain the query, scan all messages.
+    var lowerQ = query.toLowerCase();
+    if (!target || (target.textContent || "").toLowerCase().indexOf(lowerQ) === -1) {
+      for (var i = 0; i < msgEls.length; i++) {
+        if (msgEls[i] && (msgEls[i].textContent || "").toLowerCase().indexOf(lowerQ) !== -1) {
+          target = msgEls[i];
+          break;
+        }
+      }
+    }
+
+    if (!target) return;
+
+    // Highlight all occurrences of the query in every message that contains it.
+    msgEls.forEach(function (el) {
+      if (el) highlightTermInElement(el, query);
+    });
+
+    // Scroll the target message into view.
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("search-highlight-msg");
+
+    // Remove highlights after a delay.
+    setTimeout(function () {
+      var marks = msgBox.querySelectorAll("mark.search-term-highlight");
+      marks.forEach(function (m) {
+        var parent = m.parentNode;
+        parent.replaceChild(document.createTextNode(m.textContent), m);
+        parent.normalize();
+      });
+      var highlighted = msgBox.querySelectorAll(".search-highlight-msg");
+      highlighted.forEach(function (el) { el.classList.remove("search-highlight-msg"); });
+    }, 5000);
+  }
+
+  function highlightTermInElement(el, query) {
+    // Walk text nodes and wrap matches in <mark> tags.
+    var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    var nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+
+    var lowerQ = query.toLowerCase();
+    nodes.forEach(function (textNode) {
+      var text = textNode.nodeValue;
+      var lowerText = text.toLowerCase();
+      var idx = lowerText.indexOf(lowerQ);
+      if (idx === -1) return;
+
+      var frag = document.createDocumentFragment();
+      var pos = 0;
+      while (idx !== -1) {
+        if (idx > pos) {
+          frag.appendChild(document.createTextNode(text.substring(pos, idx)));
+        }
+        var mark = document.createElement("mark");
+        mark.className = "search-term-highlight";
+        mark.textContent = text.substring(idx, idx + query.length);
+        frag.appendChild(mark);
+        pos = idx + query.length;
+        idx = lowerText.indexOf(lowerQ, pos);
+      }
+      if (pos < text.length) {
+        frag.appendChild(document.createTextNode(text.substring(pos)));
+      }
+      textNode.parentNode.replaceChild(frag, textNode);
+    });
+  }
+
+  // ── Session search ───────────────────────────────────────────
+
+  var searchInput = $("sessionSearch");
+  var searchResults = $("searchResults");
+  var searchTimer = null;
+  var searchHits = [];
+  var searchIdx = -1;
+
+  function debounceSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(doSearch, 300);
+  }
+
+  function doSearch() {
+    var q = searchInput.value.trim();
+    if (!q || !connected) {
+      hideSearch();
+      return;
+    }
+    sendRpc("sessions.search", { query: q }).then(function (res) {
+      if (!res || !res.ok) { hideSearch(); return; }
+      searchHits = res.payload || [];
+      searchIdx = -1;
+      renderSearchResults(q);
+    });
+  }
+
+  function hideSearch() {
+    searchResults.classList.add("hidden");
+    searchHits = [];
+    searchIdx = -1;
+  }
+
+  function renderSearchResults(query) {
+    searchResults.textContent = "";
+    if (searchHits.length === 0) {
+      var empty = document.createElement("div");
+      empty.style.padding = "8px 10px";
+      empty.style.fontSize = ".78rem";
+      empty.style.color = "var(--muted)";
+      empty.textContent = "No results";
+      searchResults.appendChild(empty);
+      searchResults.classList.remove("hidden");
+      return;
+    }
+    searchHits.forEach(function (hit, i) {
+      var el = document.createElement("div");
+      el.className = "search-hit";
+      el.setAttribute("data-idx", i);
+
+      var lbl = document.createElement("div");
+      lbl.className = "search-hit-label";
+      lbl.textContent = hit.label || hit.sessionKey;
+      el.appendChild(lbl);
+
+      var snip = document.createElement("div");
+      snip.className = "search-hit-snippet";
+      // Highlight matched text safely: esc() escapes all HTML entities first,
+      // then we only wrap the already-escaped query in <mark> tags.
+      var escaped = esc(hit.snippet);
+      var qEsc = esc(query);
+      var re = new RegExp("(" + qEsc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
+      snip.innerHTML = escaped.replace(re, "<mark>$1</mark>");
+      el.appendChild(snip);
+
+      var role = document.createElement("div");
+      role.className = "search-hit-role";
+      role.textContent = hit.role;
+      el.appendChild(role);
+
+      el.addEventListener("click", function () {
+        var ctx = { query: query, messageIndex: hit.messageIndex };
+        switchSession(hit.sessionKey, ctx);
+        searchInput.value = "";
+        hideSearch();
+      });
+
+      searchResults.appendChild(el);
+    });
+    searchResults.classList.remove("hidden");
+  }
+
+  function updateSearchActive() {
+    var items = searchResults.querySelectorAll(".search-hit");
+    items.forEach(function (el, i) {
+      el.classList.toggle("kb-active", i === searchIdx);
+    });
+    if (searchIdx >= 0 && items[searchIdx]) {
+      items[searchIdx].scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  searchInput.addEventListener("input", debounceSearch);
+
+  searchInput.addEventListener("keydown", function (e) {
+    if (searchResults.classList.contains("hidden")) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      searchIdx = Math.min(searchIdx + 1, searchHits.length - 1);
+      updateSearchActive();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      searchIdx = Math.max(searchIdx - 1, 0);
+      updateSearchActive();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (searchIdx >= 0 && searchHits[searchIdx]) {
+        var h = searchHits[searchIdx];
+        var ctx = { query: searchInput.value.trim(), messageIndex: h.messageIndex };
+        switchSession(h.sessionKey, ctx);
+        searchInput.value = "";
+        hideSearch();
+      }
+    } else if (e.key === "Escape") {
+      searchInput.value = "";
+      hideSearch();
+    }
+  });
+
+  // Close search when clicking outside
+  document.addEventListener("click", function (e) {
+    if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+      hideSearch();
+    }
+  });
 
   newSessionBtn.addEventListener("click", function () {
     var key = "session:" + crypto.randomUUID();

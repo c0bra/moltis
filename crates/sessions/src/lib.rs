@@ -10,3 +10,4 @@ pub mod metadata;
 pub mod store;
 
 pub use key::SessionKey;
+pub use store::SearchResult;

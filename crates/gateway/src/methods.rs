@@ -49,6 +49,7 @@ const READ_METHODS: &[&str] = &[
     "voicewake.get",
     "sessions.list",
     "sessions.preview",
+    "sessions.search",
     "cron.list",
     "cron.status",
     "cron.runs",
@@ -994,6 +995,19 @@ impl MethodRegistry {
                         .services
                         .session
                         .preview(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "sessions.search",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .session
+                        .search(ctx.params.clone())
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
                 })

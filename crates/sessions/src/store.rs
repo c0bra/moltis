@@ -6,6 +6,16 @@ use std::{
 
 use anyhow::Result;
 use fd_lock::RwLock;
+use serde::{Deserialize, Serialize};
+
+/// A single search hit within a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub session_key: String,
+    pub snippet: String,
+    pub role: String,
+    pub message_index: usize,
+}
 
 /// Append-only JSONL session storage with file locking.
 pub struct SessionStore {
@@ -120,6 +130,92 @@ impl SessionStore {
         Ok(())
     }
 
+    /// List all session keys by scanning JSONL files in the base directory.
+    pub fn list_keys(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(&self.base_dir) else {
+            return vec![];
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name.strip_suffix(".jsonl")
+                    .map(|s| s.replace('_', ":"))
+            })
+            .collect()
+    }
+
+    /// Search all sessions for messages containing `query` (case-insensitive).
+    /// Returns up to `max_results` hits, at most one per session.
+    pub async fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>> {
+        let base = self.base_dir.clone();
+        let query = query.to_lowercase();
+
+        tokio::task::spawn_blocking(move || {
+            let mut results = Vec::new();
+            let entries = fs::read_dir(&base)?;
+
+            for entry in entries.flatten() {
+                if results.len() >= max_results {
+                    break;
+                }
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let Some(key_raw) = name.strip_suffix(".jsonl") else {
+                    continue;
+                };
+                let session_key = key_raw.replace('_', ":");
+
+                let Ok(file) = File::open(&path) else {
+                    continue;
+                };
+                let reader = BufReader::new(file);
+                for (idx, line) in reader.lines().enumerate() {
+                    let Ok(line) = line else { continue };
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                        continue;
+                    };
+                    let content = val
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if content.to_lowercase().contains(&query) {
+                        let role = val
+                            .get("role")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        // Build a snippet: find the match position and extract context.
+                        let lower = content.to_lowercase();
+                        let pos = lower.find(&query).unwrap_or(0);
+                        let start = pos.saturating_sub(40);
+                        let end = (pos + query.len() + 60).min(content.len());
+                        let snippet = content[start..end].to_string();
+
+                        results.push(SearchResult {
+                            session_key: session_key.clone(),
+                            snippet,
+                            role,
+                            message_index: idx,
+                        });
+                        // One hit per session is enough for autocomplete.
+                        break;
+                    }
+                }
+            }
+
+            Ok(results)
+        })
+        .await?
+    }
+
     /// Count messages in a session file without parsing them.
     pub async fn count(&self, key: &str) -> Result<u32> {
         let path = self.path_for(key);
@@ -205,6 +301,83 @@ mod tests {
         store.append("main", &json!({"role": "user"})).await.unwrap();
         store.append("main", &json!({"role": "assistant"})).await.unwrap();
         assert_eq!(store.count("main").await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_search_matching() {
+        let (store, _dir) = temp_store();
+
+        store.append("s1", &json!({"role": "user", "content": "hello world"})).await.unwrap();
+        store.append("s1", &json!({"role": "assistant", "content": "hi there"})).await.unwrap();
+        store.append("s2", &json!({"role": "user", "content": "goodbye world"})).await.unwrap();
+
+        let results = store.search("hello", 10).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_key, "s1");
+        assert_eq!(results[0].role, "user");
+        assert!(results[0].snippet.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_search_case_insensitive() {
+        let (store, _dir) = temp_store();
+
+        store.append("s1", &json!({"role": "user", "content": "Hello World"})).await.unwrap();
+
+        let results = store.search("hello world", 10).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_key, "s1");
+    }
+
+    #[tokio::test]
+    async fn test_search_no_match() {
+        let (store, _dir) = temp_store();
+
+        store.append("s1", &json!({"role": "user", "content": "hello"})).await.unwrap();
+
+        let results = store.search("xyz", 10).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_empty_query() {
+        let (store, _dir) = temp_store();
+
+        store.append("s1", &json!({"role": "user", "content": "hello"})).await.unwrap();
+
+        // Empty query should match nothing (caller should guard against this)
+        let results = store.search("", 10).await.unwrap();
+        // Empty string is contained in every string, so it would match.
+        // The frontend guards against empty queries, but the store doesn't — that's fine.
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_across_sessions() {
+        let (store, _dir) = temp_store();
+
+        store.append("s1", &json!({"role": "user", "content": "rust is great"})).await.unwrap();
+        store.append("s2", &json!({"role": "assistant", "content": "rust is awesome"})).await.unwrap();
+        store.append("s3", &json!({"role": "user", "content": "python is nice"})).await.unwrap();
+
+        let results = store.search("rust", 10).await.unwrap();
+        assert_eq!(results.len(), 2);
+        let keys: Vec<&str> = results.iter().map(|r| r.session_key.as_str()).collect();
+        assert!(keys.contains(&"s1"));
+        assert!(keys.contains(&"s2"));
+    }
+
+    #[tokio::test]
+    async fn test_search_max_results() {
+        let (store, _dir) = temp_store();
+
+        for i in 0..10 {
+            let key = format!("s{i}");
+            store.append(&key, &json!({"role": "user", "content": "common term"})).await.unwrap();
+        }
+
+        let results = store.search("common", 3).await.unwrap();
+        assert!(results.len() <= 3);
     }
 
     #[tokio::test]

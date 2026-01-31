@@ -50,6 +50,7 @@ pub trait SessionService: Send + Sync {
     async fn reset(&self, params: Value) -> ServiceResult;
     async fn delete(&self, params: Value) -> ServiceResult;
     async fn compact(&self, params: Value) -> ServiceResult;
+    async fn search(&self, params: Value) -> ServiceResult;
 }
 
 pub struct NoopSessionService;
@@ -82,6 +83,10 @@ impl SessionService for NoopSessionService {
 
     async fn compact(&self, _p: Value) -> ServiceResult {
         Ok(serde_json::json!({}))
+    }
+
+    async fn search(&self, _p: Value) -> ServiceResult {
+        Ok(serde_json::json!([]))
     }
 }
 

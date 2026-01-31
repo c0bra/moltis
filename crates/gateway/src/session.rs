@@ -147,4 +147,46 @@ impl SessionService for LiveSessionService {
         // Stub — compaction not yet implemented.
         Ok(serde_json::json!({}))
     }
+
+    async fn search(&self, params: Value) -> ServiceResult {
+        let query = params
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+
+        if query.is_empty() {
+            return Ok(serde_json::json!([]));
+        }
+
+        let max = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20) as usize;
+
+        let results = self
+            .store
+            .search(query, max)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let meta = self.metadata.read().await;
+        let enriched: Vec<Value> = results
+            .into_iter()
+            .map(|r| {
+                let label = meta
+                    .get(&r.session_key)
+                    .and_then(|e| e.label.clone());
+                serde_json::json!({
+                    "sessionKey": r.session_key,
+                    "snippet": r.snippet,
+                    "role": r.role,
+                    "messageIndex": r.message_index,
+                    "label": label,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!(enriched))
+    }
 }
