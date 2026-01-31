@@ -6,7 +6,8 @@ import { currentPage, mount } from "./router.js";
 import { fetchModels } from "./models.js";
 import { fetchSessions, setSessionReplying, setSessionUnread, bumpSessionCount, switchSession } from "./sessions.js";
 import { fetchProjects } from "./projects.js";
-import { chatAddMsg, chatAddErrorCard, chatAddErrorMsg, removeThinking, renderApprovalCard, stripChannelPrefix, appendChannelFooter, updateTokenBar, renderCompactCard } from "./chat-ui.js";
+import { chatAddMsg, chatAddErrorCard, chatAddErrorMsg, removeThinking, renderApprovalCard, stripChannelPrefix, appendChannelFooter, updateTokenBar } from "./chat-ui.js";
+import { renderCompactCard } from "./page-chat.js";
 import { updateLogsAlert, clearLogsAlert } from "./logs-alert.js";
 
 export function connect() {

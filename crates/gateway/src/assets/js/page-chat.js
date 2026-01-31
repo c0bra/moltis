@@ -273,6 +273,58 @@ function renderContextCard(data) {
   S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
 }
 
+export function renderCompactCard(data) {
+  if (!S.chatMsgBox) return;
+  slashInjectStyles();
+
+  var card = ctxEl("div", "ctx-card");
+
+  var header = ctxEl("div", "ctx-header");
+  var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  var p1 = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  p1.setAttribute("points", "4 14 10 14 10 20");
+  var p2 = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  p2.setAttribute("points", "20 10 14 10 14 4");
+  var l1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  l1.setAttribute("x1", "14"); l1.setAttribute("y1", "10");
+  l1.setAttribute("x2", "21"); l1.setAttribute("y2", "3");
+  var l2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  l2.setAttribute("x1", "3"); l2.setAttribute("y1", "21");
+  l2.setAttribute("x2", "10"); l2.setAttribute("y2", "14");
+  svg.appendChild(p1);
+  svg.appendChild(p2);
+  svg.appendChild(l1);
+  svg.appendChild(l2);
+  header.appendChild(svg);
+  header.appendChild(ctxEl("span", "ctx-header-title", "Conversation compacted"));
+  card.appendChild(header);
+
+  var statsSection = ctxSection("Before compact");
+  statsSection.appendChild(ctxRow("Messages", String(data.messageCount || 0)));
+  statsSection.appendChild(ctxRow("Total tokens", formatTokens(data.totalTokens || 0)));
+  if (data.contextWindow) {
+    var pctUsed = Math.round((data.totalTokens || 0) / data.contextWindow * 100);
+    statsSection.appendChild(ctxRow("Context usage", pctUsed + "% of " + formatTokens(data.contextWindow)));
+  }
+  card.appendChild(statsSection);
+
+  var afterSection = ctxSection("After compact");
+  afterSection.appendChild(ctxRow("Messages", "1 (summary)"));
+  afterSection.appendChild(ctxRow("Status", "Conversation history replaced with a summary"));
+  card.appendChild(afterSection);
+
+  S.chatMsgBox.appendChild(card);
+  S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
+}
+
 // ── Send chat message ────────────────────────────────────
 function sendChat() {
   var text = S.chatInput.value.trim();
