@@ -74,6 +74,14 @@ To find the correct model IDs:
 - Ideally, query the provider's `/models` endpoint at registration time to
   build the list dynamically (not yet implemented).
 
+## Plans and Session History
+
+Plans are stored in `prompts/` (configured via `.claude/settings.json`).
+When entering plan mode, plans are automatically saved there. After completing
+a significant piece of work, write a brief session summary to
+`prompts/session-YYYY-MM-DD-<topic>.md` capturing what was done, key decisions,
+and any open items.
+
 ## Git Workflow
 
 Follow conventional commit format: `feat|fix|refactor|docs|test|chore(scope): description`
