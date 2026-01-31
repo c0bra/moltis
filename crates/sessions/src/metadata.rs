@@ -14,6 +14,8 @@ pub struct SessionEntry {
     pub id: String,
     pub key: String,
     pub label: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: u32,
@@ -74,10 +76,19 @@ impl SessionMetadata {
                 id: uuid::Uuid::new_v4().to_string(),
                 key: key.to_string(),
                 label,
+                model: None,
                 created_at: now,
                 updated_at: now,
                 message_count: 0,
             })
+    }
+
+    /// Update the model associated with a session.
+    pub fn set_model(&mut self, key: &str, model: Option<String>) {
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.model = model;
+            entry.updated_at = now_ms();
+        }
     }
 
     /// Update message count and updated_at timestamp.

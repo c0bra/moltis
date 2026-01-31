@@ -17,10 +17,17 @@
   <h1 class="text-base font-medium tracking-wide text-[var(--text-strong)]">moltis</h1>
   <span class="status-dot" id="statusDot"></span>
   <span class="text-xs text-[var(--muted)]" id="statusText">disconnected</span>
-  <!-- Model selector -->
-  <select id="modelSelect" class="text-xs bg-[var(--surface2)] border border-[var(--border)] text-[var(--muted)] px-2 py-1 rounded-md focus:outline-none focus:border-[var(--border-strong)] cursor-pointer font-[var(--font-body)] hidden">
-    <option value="">no models</option>
-  </select>
+  <!-- Model selector (searchable) -->
+  <div id="modelCombo" class="model-combo hidden">
+    <button id="modelComboBtn" class="model-combo-btn" type="button">
+      <span id="modelComboLabel">no models</span>
+      <svg class="model-combo-chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="12" height="12"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+    </button>
+    <div id="modelDropdown" class="model-dropdown hidden">
+      <input id="modelSearchInput" type="text" placeholder="Search models…" class="model-search-input" autocomplete="off" />
+      <div id="modelDropdownList" class="model-dropdown-list"></div>
+    </div>
+  </div>
   <button id="addProviderBtn" class="text-xs text-[var(--muted)] border border-[var(--border)] w-7 h-7 rounded-md hover:text-[var(--text)] hover:border-[var(--border-strong)] transition-colors cursor-pointer bg-transparent font-[var(--font-body)] flex items-center justify-center" title="Add provider">+</button>
 
   <div class="flex-1"></div>

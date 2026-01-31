@@ -17,6 +17,9 @@
   var streamEl = null;
   var streamText = "";
   var lastToolOutput = "";
+  var chatHistory = JSON.parse(localStorage.getItem("moltis-chat-history") || "[]");
+  var chatHistoryIdx = -1; // -1 = not browsing history
+  var chatHistoryDraft = "";
 
   // ── Theme ────────────────────────────────────────────────────
   function getSystemTheme() {
@@ -59,7 +62,17 @@
 
   var dot = $("statusDot");
   var sText = $("statusText");
-  var modelSelect = $("modelSelect");
+  var modelCombo = $("modelCombo");
+  var modelComboBtn = $("modelComboBtn");
+  var modelComboLabel = $("modelComboLabel");
+  var modelDropdown = $("modelDropdown");
+  var modelSearchInput = $("modelSearchInput");
+  var modelDropdownList = $("modelDropdownList");
+  var selectedModelId = localStorage.getItem("moltis-model") || "";
+  var modelIdx = -1;
+  function setSessionModel(sessionKey, modelId) {
+    sendRpc("sessions.patch", { key: sessionKey, model: modelId });
+  }
   var sessionsToggle = $("sessionsToggle");
   var sessionsPanel = $("sessionsPanel");
   var sessionList = $("sessionList");
@@ -101,29 +114,130 @@
     sendRpc("models.list", {}).then(function (res) {
       if (!res || !res.ok) return;
       models = res.payload || [];
-      var saved = localStorage.getItem("moltis-model") || "";
-      modelSelect.textContent = "";
       if (models.length === 0) {
-        var opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "no models";
-        modelSelect.appendChild(opt);
-        modelSelect.classList.add("hidden");
+        modelCombo.classList.add("hidden");
         return;
       }
-      models.forEach(function (m) {
-        var opt = document.createElement("option");
-        opt.value = m.id;
-        opt.textContent = m.displayName || m.id;
-        if (m.id === saved) opt.selected = true;
-        modelSelect.appendChild(opt);
-      });
-      modelSelect.classList.remove("hidden");
+      var saved = localStorage.getItem("moltis-model") || "";
+      var found = models.find(function (m) { return m.id === saved; });
+      if (found) {
+        selectedModelId = found.id;
+        modelComboLabel.textContent = found.displayName || found.id;
+      } else {
+        selectedModelId = models[0].id;
+        modelComboLabel.textContent = models[0].displayName || models[0].id;
+        localStorage.setItem("moltis-model", selectedModelId);
+      }
+      modelCombo.classList.remove("hidden");
     });
   }
 
-  modelSelect.addEventListener("change", function () {
-    localStorage.setItem("moltis-model", modelSelect.value);
+  function selectModel(m) {
+    selectedModelId = m.id;
+    modelComboLabel.textContent = m.displayName || m.id;
+    localStorage.setItem("moltis-model", m.id);
+    setSessionModel(activeSessionKey, m.id);
+    closeModelDropdown();
+  }
+
+  function openModelDropdown() {
+    modelDropdown.classList.remove("hidden");
+    modelSearchInput.value = "";
+    modelIdx = -1;
+    renderModelList("");
+    requestAnimationFrame(function () { modelSearchInput.focus(); });
+  }
+
+  function closeModelDropdown() {
+    modelDropdown.classList.add("hidden");
+    modelSearchInput.value = "";
+    modelIdx = -1;
+  }
+
+  function renderModelList(query) {
+    modelDropdownList.textContent = "";
+    var q = query.toLowerCase();
+    var filtered = models.filter(function (m) {
+      var label = (m.displayName || m.id).toLowerCase();
+      var provider = (m.provider || "").toLowerCase();
+      return !q || label.indexOf(q) !== -1 || provider.indexOf(q) !== -1 || m.id.toLowerCase().indexOf(q) !== -1;
+    });
+    if (filtered.length === 0) {
+      var empty = document.createElement("div");
+      empty.className = "model-dropdown-empty";
+      empty.textContent = "No matching models";
+      modelDropdownList.appendChild(empty);
+      return;
+    }
+    filtered.forEach(function (m, i) {
+      var el = document.createElement("div");
+      el.className = "model-dropdown-item";
+      if (m.id === selectedModelId) el.classList.add("selected");
+      var label = document.createElement("span");
+      label.className = "model-item-label";
+      label.textContent = m.displayName || m.id;
+      el.appendChild(label);
+      if (m.provider) {
+        var prov = document.createElement("span");
+        prov.className = "model-item-provider";
+        prov.textContent = m.provider;
+        el.appendChild(prov);
+      }
+      el.addEventListener("click", function () { selectModel(m); });
+      modelDropdownList.appendChild(el);
+    });
+  }
+
+  function updateModelActive() {
+    var items = modelDropdownList.querySelectorAll(".model-dropdown-item");
+    items.forEach(function (el, i) {
+      el.classList.toggle("kb-active", i === modelIdx);
+    });
+    if (modelIdx >= 0 && items[modelIdx]) {
+      items[modelIdx].scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  modelComboBtn.addEventListener("click", function () {
+    if (modelDropdown.classList.contains("hidden")) {
+      openModelDropdown();
+    } else {
+      closeModelDropdown();
+    }
+  });
+
+  modelSearchInput.addEventListener("input", function () {
+    modelIdx = -1;
+    renderModelList(modelSearchInput.value.trim());
+  });
+
+  modelSearchInput.addEventListener("keydown", function (e) {
+    var items = modelDropdownList.querySelectorAll(".model-dropdown-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      modelIdx = Math.min(modelIdx + 1, items.length - 1);
+      updateModelActive();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      modelIdx = Math.max(modelIdx - 1, 0);
+      updateModelActive();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (modelIdx >= 0 && items[modelIdx]) {
+        items[modelIdx].click();
+      } else if (items.length === 1) {
+        items[0].click();
+      }
+    } else if (e.key === "Escape") {
+      closeModelDropdown();
+      modelComboBtn.focus();
+    }
+  });
+
+  document.addEventListener("click", function (e) {
+    if (!modelCombo.contains(e.target)) {
+      closeModelDropdown();
+    }
   });
 
   // ── Router ──────────────────────────────────────────────────
@@ -828,6 +942,16 @@
 
     sendRpc("sessions.switch", { key: key }).then(function (res) {
       if (res && res.ok && res.payload) {
+        // Restore per-session model
+        var entry = res.payload.entry || {};
+        if (entry.model && models.length > 0) {
+          var found = models.find(function (m) { return m.id === entry.model; });
+          if (found) {
+            selectedModelId = found.id;
+            modelComboLabel.textContent = found.displayName || found.id;
+            localStorage.setItem("moltis-model", found.id);
+          }
+        }
         var history = res.payload.history || [];
         var msgEls = [];
         history.forEach(function (msg) {
@@ -925,12 +1049,20 @@
   function sendChat() {
     var text = chatInput.value.trim();
     if (!text || !connected) return;
+    chatHistory.push(text);
+    if (chatHistory.length > 200) chatHistory = chatHistory.slice(-200);
+    localStorage.setItem("moltis-chat-history", JSON.stringify(chatHistory));
+    chatHistoryIdx = -1;
+    chatHistoryDraft = "";
     chatInput.value = "";
     chatAutoResize();
     chatAddMsg("user", renderMarkdown(text), true);
     var chatParams = { text: text };
-    var selectedModel = modelSelect.value;
-    if (selectedModel) chatParams.model = selectedModel;
+    var selectedModel = selectedModelId;
+    if (selectedModel) {
+      chatParams.model = selectedModel;
+      setSessionModel(activeSessionKey, selectedModel);
+    }
     bumpSessionCount(activeSessionKey, 1);
     setSessionReplying(activeSessionKey, true);
     sendRpc("chat.send", chatParams).then(function (res) {
@@ -968,7 +1100,33 @@
 
     chatInput.addEventListener("input", chatAutoResize);
     chatInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); return; }
+      if (e.key === "ArrowUp" && chatInput.selectionStart === 0 && !e.shiftKey) {
+        if (chatHistory.length === 0) return;
+        e.preventDefault();
+        if (chatHistoryIdx === -1) {
+          chatHistoryDraft = chatInput.value;
+          chatHistoryIdx = chatHistory.length - 1;
+        } else if (chatHistoryIdx > 0) {
+          chatHistoryIdx--;
+        }
+        chatInput.value = chatHistory[chatHistoryIdx];
+        chatAutoResize();
+        return;
+      }
+      if (e.key === "ArrowDown" && chatInput.selectionStart === chatInput.value.length && !e.shiftKey) {
+        if (chatHistoryIdx === -1) return;
+        e.preventDefault();
+        if (chatHistoryIdx < chatHistory.length - 1) {
+          chatHistoryIdx++;
+          chatInput.value = chatHistory[chatHistoryIdx];
+        } else {
+          chatHistoryIdx = -1;
+          chatInput.value = chatHistoryDraft;
+        }
+        chatAutoResize();
+        return;
+      }
     });
     chatSendBtn.addEventListener("click", sendChat);
 
