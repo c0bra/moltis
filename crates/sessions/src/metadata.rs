@@ -226,7 +226,7 @@ impl SqliteSessionMetadata {
             Err(e) => {
                 tracing::error!("sessions.get failed: {e}");
                 None
-            }
+            },
         }
     }
 
@@ -252,9 +252,7 @@ impl SqliteSessionMetadata {
         .bind(now)
         .execute(&self.pool)
         .await?;
-        self.get(key).await.ok_or_else(|| {
-            sqlx::Error::RowNotFound
-        })
+        self.get(key).await.ok_or_else(|| sqlx::Error::RowNotFound)
     }
 
     pub async fn set_model(&self, key: &str, model: Option<String>) {

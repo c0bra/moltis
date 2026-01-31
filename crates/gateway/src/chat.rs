@@ -639,8 +639,12 @@ async fn run_with_tools(
     session_context: Option<&str>,
 ) -> Option<(String, u32, u32)> {
     let native_tools = provider.supports_tools();
-    let system_prompt =
-        build_system_prompt_with_session(tool_registry, native_tools, project_context, session_context);
+    let system_prompt = build_system_prompt_with_session(
+        tool_registry,
+        native_tools,
+        project_context,
+        session_context,
+    );
 
     // Broadcast tool events to the UI as they happen.
     let state_for_events = Arc::clone(state);
@@ -781,7 +785,11 @@ async fn run_with_tools(
                 BroadcastOpts::default(),
             )
             .await;
-            Some((result.text, result.usage.input_tokens, result.usage.output_tokens))
+            Some((
+                result.text,
+                result.usage.input_tokens,
+                result.usage.output_tokens,
+            ))
         },
         Err(e) => {
             warn!(run_id, error = %e, "agent run error");

@@ -76,7 +76,11 @@ impl SessionService for LiveSessionService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "missing 'key' parameter".to_string())?;
 
-        let entry = self.metadata.upsert(key, None).await.map_err(|e| e.to_string())?;
+        let entry = self
+            .metadata
+            .upsert(key, None)
+            .await
+            .map_err(|e| e.to_string())?;
         let history = self.store.read(key).await.map_err(|e| e.to_string())?;
 
         Ok(serde_json::json!({
@@ -130,7 +134,9 @@ impl SessionService for LiveSessionService {
         // Update sandbox_enabled if provided.
         if params.get("sandbox_enabled").is_some() {
             let sandbox_enabled = params.get("sandbox_enabled").and_then(|v| v.as_bool());
-            self.metadata.set_sandbox_enabled(key, sandbox_enabled).await;
+            self.metadata
+                .set_sandbox_enabled(key, sandbox_enabled)
+                .await;
             // Push override to sandbox router.
             if let Some(ref router) = self.sandbox_router {
                 if let Some(enabled) = sandbox_enabled {
