@@ -481,6 +481,7 @@ impl Sandbox for AppleContainerSandbox {
     async fn ensure_ready(&self, id: &SandboxId, image_override: Option<&str>) -> Result<()> {
         let name = self.container_name(id);
 
+        // Check if container exists and parse its state.
         let check = tokio::process::Command::new("container")
             .args(["inspect", &name])
             .output()
@@ -489,10 +490,25 @@ impl Sandbox for AppleContainerSandbox {
         if let Ok(output) = check
             && output.status.success()
         {
-            debug!(name, "apple container already running");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // If the container exists but is stopped, restart it.
+            if stdout.contains("stopped") || stdout.contains("exited") {
+                debug!(name, "apple container exists but stopped, starting");
+                let start = tokio::process::Command::new("container")
+                    .args(["start", &name])
+                    .output()
+                    .await?;
+                if !start.status.success() {
+                    let stderr = String::from_utf8_lossy(&start.stderr);
+                    anyhow::bail!("container start failed: {}", stderr.trim());
+                }
+            } else {
+                debug!(name, "apple container already running");
+            }
             return Ok(());
         }
 
+        // Container doesn't exist — create it.
         let args = vec![
             "run".to_string(),
             "-d".to_string(),
