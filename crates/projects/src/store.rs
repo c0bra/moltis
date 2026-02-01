@@ -66,7 +66,7 @@ impl TomlProjectStore {
 impl ProjectStore for TomlProjectStore {
     async fn list(&self) -> Result<Vec<Project>> {
         let mut projects = self.read_file()?.projects;
-        projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        projects.sort_by_key(|p| std::cmp::Reverse(p.updated_at));
         Ok(projects)
     }
 
