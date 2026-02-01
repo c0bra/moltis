@@ -10,6 +10,9 @@ use {
 
 use crate::exec::{ExecOpts, ExecResult};
 
+/// Default container image used when none is configured.
+pub const DEFAULT_SANDBOX_IMAGE: &str = "ubuntu:25.10";
+
 /// Sandbox mode controlling when sandboxing is applied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,7 +59,7 @@ pub struct ResourceLimits {
 }
 
 /// Configuration for sandbox behavior.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SandboxConfig {
     pub mode: SandboxMode,
@@ -65,7 +68,25 @@ pub struct SandboxConfig {
     pub image: Option<String>,
     pub container_prefix: Option<String>,
     pub no_network: bool,
+    /// Backend: `"auto"` (default), `"docker"`, or `"apple-container"`.
+    /// `"auto"` prefers Apple Container on macOS when available.
+    pub backend: String,
     pub resource_limits: ResourceLimits,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            mode: SandboxMode::default(),
+            scope: SandboxScope::default(),
+            workspace_mount: WorkspaceMount::default(),
+            image: None,
+            container_prefix: None,
+            no_network: false,
+            backend: "auto".into(),
+            resource_limits: ResourceLimits::default(),
+        }
+    }
 }
 
 /// Sandbox identifier — session or agent scoped.
@@ -82,7 +103,8 @@ pub trait Sandbox: Send + Sync {
     fn backend_name(&self) -> &'static str;
 
     /// Ensure the sandbox environment is ready (e.g., container started).
-    async fn ensure_ready(&self, id: &SandboxId) -> Result<()>;
+    /// If `image_override` is provided, use that image instead of the configured default.
+    async fn ensure_ready(&self, id: &SandboxId, image_override: Option<&str>) -> Result<()>;
 
     /// Execute a command inside the sandbox.
     async fn exec(&self, id: &SandboxId, command: &str, opts: &ExecOpts) -> Result<ExecResult>;
@@ -102,7 +124,10 @@ impl DockerSandbox {
     }
 
     fn image(&self) -> &str {
-        self.config.image.as_deref().unwrap_or("ubuntu:24.04")
+        self.config
+            .image
+            .as_deref()
+            .unwrap_or(DEFAULT_SANDBOX_IMAGE)
     }
 
     fn container_prefix(&self) -> &str {
@@ -151,7 +176,7 @@ impl Sandbox for DockerSandbox {
         "docker"
     }
 
-    async fn ensure_ready(&self, id: &SandboxId) -> Result<()> {
+    async fn ensure_ready(&self, id: &SandboxId, image_override: Option<&str>) -> Result<()> {
         let name = self.container_name(id);
 
         // Check if container already running.
@@ -182,7 +207,8 @@ impl Sandbox for DockerSandbox {
         args.extend(self.resource_args());
         args.extend(self.workspace_args());
 
-        args.push(self.image().to_string());
+        let image = image_override.unwrap_or_else(|| self.image());
+        args.push(image.to_string());
         args.extend(["sleep".to_string(), "infinity".to_string()]);
 
         let output = tokio::process::Command::new("docker")
@@ -267,7 +293,7 @@ impl Sandbox for NoSandbox {
         "none"
     }
 
-    async fn ensure_ready(&self, _id: &SandboxId) -> Result<()> {
+    async fn ensure_ready(&self, _id: &SandboxId, _image_override: Option<&str>) -> Result<()> {
         Ok(())
     }
 
@@ -325,7 +351,7 @@ impl Sandbox for CgroupSandbox {
         "cgroup"
     }
 
-    async fn ensure_ready(&self, _id: &SandboxId) -> Result<()> {
+    async fn ensure_ready(&self, _id: &SandboxId, _image_override: Option<&str>) -> Result<()> {
         let output = tokio::process::Command::new("systemd-run")
             .arg("--version")
             .output()
@@ -418,7 +444,10 @@ impl AppleContainerSandbox {
     }
 
     fn image(&self) -> &str {
-        self.config.image.as_deref().unwrap_or("ubuntu:24.04")
+        self.config
+            .image
+            .as_deref()
+            .unwrap_or(DEFAULT_SANDBOX_IMAGE)
     }
 
     fn container_prefix(&self) -> &str {
@@ -449,7 +478,7 @@ impl Sandbox for AppleContainerSandbox {
         "apple-container"
     }
 
-    async fn ensure_ready(&self, id: &SandboxId) -> Result<()> {
+    async fn ensure_ready(&self, id: &SandboxId, image_override: Option<&str>) -> Result<()> {
         let name = self.container_name(id);
 
         let check = tokio::process::Command::new("container")
@@ -469,7 +498,7 @@ impl Sandbox for AppleContainerSandbox {
             "-d".to_string(),
             "--name".to_string(),
             name.clone(),
-            self.image().to_string(),
+            image_override.unwrap_or_else(|| self.image()).to_string(),
         ];
 
         let output = tokio::process::Command::new("container")
@@ -554,14 +583,57 @@ pub fn create_sandbox(config: SandboxConfig) -> Arc<dyn Sandbox> {
         return Arc::new(NoSandbox);
     }
 
-    Arc::new(DockerSandbox::new(config))
+    select_backend(config)
 }
 
 /// Create a real sandbox backend regardless of mode (for use by SandboxRouter,
 /// which may need a real backend even when global mode is Off because per-session
 /// overrides can enable sandboxing dynamically).
 fn create_sandbox_backend(config: SandboxConfig) -> Arc<dyn Sandbox> {
-    Arc::new(DockerSandbox::new(config))
+    select_backend(config)
+}
+
+/// Select the sandbox backend based on config and platform availability.
+///
+/// When `backend` is `"auto"` (the default):
+/// - On macOS, prefer Apple Container if the `container` CLI is installed
+///   (each sandbox runs in a lightweight VM — stronger isolation than Docker).
+/// - Fall back to Docker otherwise.
+fn select_backend(config: SandboxConfig) -> Arc<dyn Sandbox> {
+    match config.backend.as_str() {
+        "docker" => Arc::new(DockerSandbox::new(config)),
+        #[cfg(target_os = "macos")]
+        "apple-container" => Arc::new(AppleContainerSandbox::new(config)),
+        "auto" | _ => auto_detect_backend(config),
+    }
+}
+
+fn auto_detect_backend(config: SandboxConfig) -> Arc<dyn Sandbox> {
+    #[cfg(target_os = "macos")]
+    {
+        if is_cli_available("container") {
+            tracing::info!("sandbox backend: apple-container (VM-isolated, preferred)");
+            return Arc::new(AppleContainerSandbox::new(config));
+        }
+    }
+
+    if is_cli_available("docker") {
+        tracing::info!("sandbox backend: docker");
+        return Arc::new(DockerSandbox::new(config));
+    }
+
+    tracing::warn!("no container runtime found; sandboxed execution will use direct host access");
+    Arc::new(NoSandbox)
+}
+
+/// Check whether a CLI tool is available on PATH.
+fn is_cli_available(name: &str) -> bool {
+    std::process::Command::new(name)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Routes sandbox decisions per-session, with per-session overrides on top of global config.
@@ -570,6 +642,8 @@ pub struct SandboxRouter {
     backend: Arc<dyn Sandbox>,
     /// Per-session overrides: true = sandboxed, false = direct execution.
     overrides: RwLock<HashMap<String, bool>>,
+    /// Per-session image overrides.
+    image_overrides: RwLock<HashMap<String, String>>,
 }
 
 impl SandboxRouter {
@@ -581,6 +655,7 @@ impl SandboxRouter {
             config,
             backend,
             overrides: RwLock::new(HashMap::new()),
+            image_overrides: RwLock::new(HashMap::new()),
         }
     }
 
@@ -590,6 +665,7 @@ impl SandboxRouter {
             config,
             backend,
             overrides: RwLock::new(HashMap::new()),
+            image_overrides: RwLock::new(HashMap::new()),
         }
     }
 
@@ -664,6 +740,39 @@ impl SandboxRouter {
     /// Human-readable name of the sandbox backend (e.g. "docker", "apple-container").
     pub fn backend_name(&self) -> &'static str {
         self.backend.backend_name()
+    }
+
+    /// Set a per-session image override.
+    pub async fn set_image_override(&self, session_key: &str, image: String) {
+        self.image_overrides
+            .write()
+            .await
+            .insert(session_key.to_string(), image);
+    }
+
+    /// Remove a per-session image override.
+    pub async fn remove_image_override(&self, session_key: &str) {
+        self.image_overrides.write().await.remove(session_key);
+    }
+
+    /// Resolve the container image for a session.
+    ///
+    /// Priority (highest to lowest):
+    /// 1. `skill_image` — from a skill's Dockerfile cache
+    /// 2. Per-session override (`session.sandbox_image`)
+    /// 3. Global config (`config.tools.exec.sandbox.image`)
+    /// 4. Default constant (`DEFAULT_SANDBOX_IMAGE`)
+    pub async fn resolve_image(&self, session_key: &str, skill_image: Option<&str>) -> String {
+        if let Some(img) = skill_image {
+            return img.to_string();
+        }
+        if let Some(img) = self.image_overrides.read().await.get(session_key) {
+            return img.clone();
+        }
+        self.config
+            .image
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SANDBOX_IMAGE.to_string())
     }
 }
 
@@ -759,7 +868,7 @@ mod tests {
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            sandbox.ensure_ready(&id).await.unwrap();
+            sandbox.ensure_ready(&id, None).await.unwrap();
             sandbox.cleanup(&id).await.unwrap();
         });
     }
@@ -879,7 +988,22 @@ mod tests {
 
     #[test]
     fn test_sandbox_router_backend_name() {
+        // With "auto", the backend depends on what's available on the host.
         let config = SandboxConfig::default();
+        let router = SandboxRouter::new(config);
+        let name = router.backend_name();
+        assert!(
+            name == "docker" || name == "apple-container" || name == "none",
+            "unexpected backend: {name}"
+        );
+    }
+
+    #[test]
+    fn test_sandbox_router_explicit_docker_backend() {
+        let config = SandboxConfig {
+            backend: "docker".into(),
+            ..Default::default()
+        };
         let router = SandboxRouter::new(config);
         assert_eq!(router.backend_name(), "docker");
     }
@@ -910,6 +1034,115 @@ mod tests {
         // Plain alphanumeric keys pass through unchanged.
         let id2 = router.sandbox_id_for("main");
         assert_eq!(id2.key, "main");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_image_default() {
+        let config = SandboxConfig::default();
+        let router = SandboxRouter::new(config);
+        let img = router.resolve_image("main", None).await;
+        assert_eq!(img, DEFAULT_SANDBOX_IMAGE);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_image_skill_override() {
+        let config = SandboxConfig::default();
+        let router = SandboxRouter::new(config);
+        let img = router
+            .resolve_image("main", Some("moltis-cache/my-skill:abc123"))
+            .await;
+        assert_eq!(img, "moltis-cache/my-skill:abc123");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_image_session_override() {
+        let config = SandboxConfig::default();
+        let router = SandboxRouter::new(config);
+        router
+            .set_image_override("sess1", "custom:latest".into())
+            .await;
+        let img = router.resolve_image("sess1", None).await;
+        assert_eq!(img, "custom:latest");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_image_skill_beats_session() {
+        let config = SandboxConfig::default();
+        let router = SandboxRouter::new(config);
+        router
+            .set_image_override("sess1", "custom:latest".into())
+            .await;
+        let img = router
+            .resolve_image("sess1", Some("moltis-cache/skill:hash"))
+            .await;
+        assert_eq!(img, "moltis-cache/skill:hash");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_image_config_override() {
+        let config = SandboxConfig {
+            image: Some("my-org/image:v1".into()),
+            ..Default::default()
+        };
+        let router = SandboxRouter::new(config);
+        let img = router.resolve_image("main", None).await;
+        assert_eq!(img, "my-org/image:v1");
+    }
+
+    #[tokio::test]
+    async fn test_remove_image_override() {
+        let config = SandboxConfig::default();
+        let router = SandboxRouter::new(config);
+        router
+            .set_image_override("sess1", "custom:latest".into())
+            .await;
+        router.remove_image_override("sess1").await;
+        let img = router.resolve_image("sess1", None).await;
+        assert_eq!(img, DEFAULT_SANDBOX_IMAGE);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_backend_name_apple_container() {
+        let sandbox = AppleContainerSandbox::new(SandboxConfig::default());
+        assert_eq!(sandbox.backend_name(), "apple-container");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_sandbox_router_explicit_apple_container_backend() {
+        let config = SandboxConfig {
+            backend: "apple-container".into(),
+            ..Default::default()
+        };
+        let router = SandboxRouter::new(config);
+        assert_eq!(router.backend_name(), "apple-container");
+    }
+
+    /// When both Docker and Apple Container are available, test that we can
+    /// explicitly select each one.
+    #[test]
+    fn test_select_backend_explicit_choices() {
+        // Docker backend
+        if is_cli_available("docker") {
+            let config = SandboxConfig {
+                backend: "docker".into(),
+                ..Default::default()
+            };
+            let backend = select_backend(config);
+            assert_eq!(backend.backend_name(), "docker");
+        }
+
+        // Apple Container backend (macOS only)
+        #[cfg(target_os = "macos")]
+        if is_cli_available("container") {
+            let config = SandboxConfig {
+                backend: "apple-container".into(),
+                ..Default::default()
+            };
+            let backend = select_backend(config);
+            assert_eq!(backend.backend_name(), "apple-container");
+        }
     }
 
     #[cfg(target_os = "linux")]

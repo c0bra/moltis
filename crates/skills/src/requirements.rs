@@ -186,6 +186,7 @@ mod tests {
             license: None,
             compatibility: None,
             allowed_tools: Vec::new(),
+            dockerfile: None,
             requires: SkillRequirements::default(),
             path: Default::default(),
             source: None,
@@ -204,6 +205,7 @@ mod tests {
             license: None,
             compatibility: None,
             allowed_tools: Vec::new(),
+            dockerfile: None,
             requires: SkillRequirements {
                 bins: vec!["__nonexistent_binary_xyz__".into()],
                 any_bins: Vec::new(),
@@ -226,6 +228,7 @@ mod tests {
             license: None,
             compatibility: None,
             allowed_tools: Vec::new(),
+            dockerfile: None,
             requires: SkillRequirements {
                 bins: Vec::new(),
                 any_bins: vec!["ls".into(), "__nonexistent__".into()],
@@ -250,6 +253,7 @@ mod tests {
             license: None,
             compatibility: None,
             allowed_tools: Vec::new(),
+            dockerfile: None,
             requires: SkillRequirements {
                 bins: Vec::new(),
                 any_bins: vec!["__nope1__".into(), "__nope2__".into()],
@@ -272,6 +276,7 @@ mod tests {
             license: None,
             compatibility: None,
             allowed_tools: Vec::new(),
+            dockerfile: None,
             requires: SkillRequirements {
                 bins: vec!["__missing__".into()],
                 any_bins: Vec::new(),

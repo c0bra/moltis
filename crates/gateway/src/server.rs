@@ -23,7 +23,7 @@ use {moltis_channels::ChannelPlugin, moltis_protocol::TICK_INTERVAL_MS};
 
 use moltis_agents::providers::ProviderRegistry;
 
-use moltis_tools::approval::ApprovalManager;
+use moltis_tools::{approval::ApprovalManager, image_cache::ImageBuilder};
 
 use {
     moltis_projects::ProjectStore,
@@ -82,6 +82,14 @@ pub fn build_gateway_app(state: Arc<GatewayState>, methods: Arc<MethodRegistry>)
         .route("/api/bootstrap", get(api_bootstrap_handler))
         .route("/api/skills", get(api_skills_handler))
         .route("/api/skills/search", get(api_skills_search_handler))
+        .route(
+            "/api/images/cached",
+            get(api_cached_images_handler).delete(api_prune_cached_images_handler),
+        )
+        .route(
+            "/api/images/cached/{tag}",
+            axum::routing::delete(api_delete_cached_image_handler),
+        )
         .fallback(spa_fallback);
 
     router.layer(cors).with_state(app_state)
@@ -302,6 +310,7 @@ pub async fn start_gateway(
         image: config.tools.exec.sandbox.image.clone(),
         container_prefix: config.tools.exec.sandbox.container_prefix.clone(),
         no_network: config.tools.exec.sandbox.no_network,
+        backend: config.tools.exec.sandbox.backend.clone(),
         resource_limits: moltis_tools::sandbox::ResourceLimits {
             memory_limit: config
                 .tools
@@ -321,6 +330,11 @@ pub async fn start_gateway(
         for entry in session_metadata.list().await {
             if let Some(enabled) = entry.sandbox_enabled {
                 sandbox_router.set_override(&entry.key, enabled).await;
+            }
+            if let Some(ref image) = entry.sandbox_image {
+                sandbox_router
+                    .set_image_override(&entry.key, image.clone())
+                    .await;
             }
         }
     }
@@ -561,7 +575,20 @@ pub async fn start_gateway(
                 "s"
             }
         ),
+        format!("sandbox: {} backend", sandbox_router.backend_name()),
     ];
+    // Hint about Apple Container on macOS when using Docker.
+    #[cfg(target_os = "macos")]
+    if sandbox_router.backend_name() == "docker" {
+        lines.push(
+            "hint: install Apple Container for VM-isolated sandboxing (see docs/sandbox.md)"
+                .into(),
+        );
+    }
+    // Warn when no sandbox backend is available.
+    if sandbox_router.backend_name() == "none" {
+        lines.push("⚠ no container runtime found; commands run on host".into());
+    }
     #[cfg(feature = "tls")]
     if tls_active {
         if let Some(ref ca) = ca_cert_path {
@@ -704,18 +731,13 @@ async fn spa_fallback(uri: axum::http::Uri) -> impl IntoResponse {
         raw.replace("__BUILD_TS__", "dev")
     } else {
         // Production: inject content-hash versioned URLs for immutable caching
-        static HASH: std::sync::LazyLock<String> =
-            std::sync::LazyLock::new(asset_content_hash);
+        static HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(asset_content_hash);
         let versioned = format!("/assets/v/{}/", *HASH);
         raw.replace("__BUILD_TS__", &*HASH)
             .replace("/assets/", &versioned)
     };
 
-    (
-        [("cache-control", "no-cache, no-store")],
-        Html(body),
-    )
-        .into_response()
+    ([("cache-control", "no-cache, no-store")], Html(body)).into_response()
 }
 
 #[cfg(feature = "web-ui")]
@@ -788,11 +810,7 @@ async fn api_skills_search_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let source = params.get("source").cloned().unwrap_or_default();
-    let query = params
-        .get("q")
-        .cloned()
-        .unwrap_or_default()
-        .to_lowercase();
+    let query = params.get("q").cloned().unwrap_or_default().to_lowercase();
 
     let gw = &state.gateway;
     let repos = gw.services.skills.repos_list_full().await;
@@ -838,6 +856,63 @@ async fn api_skills_search_handler(
     Json(serde_json::json!({ "skills": skills }))
 }
 
+/// List cached tool images.
+#[cfg(feature = "web-ui")]
+async fn api_cached_images_handler() -> impl IntoResponse {
+    let builder = moltis_tools::image_cache::DockerImageBuilder::new();
+    match builder.list_cached().await {
+        Ok(images) => Json(serde_json::json!({ "images": images })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        },
+    }
+}
+
+/// Delete a specific cached tool image.
+#[cfg(feature = "web-ui")]
+async fn api_delete_cached_image_handler(Path(tag): Path<String>) -> impl IntoResponse {
+    let builder = moltis_tools::image_cache::DockerImageBuilder::new();
+    // The tag comes URL-encoded; the path captures "moltis-cache/skill:hash" as a single segment.
+    let full_tag = if tag.starts_with("moltis-cache/") {
+        tag
+    } else {
+        format!("moltis-cache/{tag}")
+    };
+    match builder.remove_cached(&full_tag).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        },
+    }
+}
+
+/// Prune all cached tool images.
+#[cfg(feature = "web-ui")]
+async fn api_prune_cached_images_handler() -> impl IntoResponse {
+    let builder = moltis_tools::image_cache::DockerImageBuilder::new();
+    match builder.prune_all().await {
+        Ok(count) => Json(serde_json::json!({ "pruned": count })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        },
+    }
+}
+
 #[cfg(feature = "web-ui")]
 static ASSETS: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets");
 
@@ -881,8 +956,7 @@ fn is_dev_assets() -> bool {
 /// mode (embedded assets) for cache-busting versioned URLs.
 #[cfg(feature = "web-ui")]
 fn asset_content_hash() -> String {
-    use std::collections::BTreeMap;
-    use std::hash::Hasher;
+    use std::{collections::BTreeMap, hash::Hasher};
 
     let mut files = BTreeMap::new();
     let mut stack: Vec<&include_dir::Dir<'_>> = vec![&ASSETS];

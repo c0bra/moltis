@@ -1120,10 +1120,7 @@ impl GatewayServices {
         self
     }
 
-    pub fn with_session_store(
-        mut self,
-        store: Arc<moltis_sessions::store::SessionStore>,
-    ) -> Self {
+    pub fn with_session_store(mut self, store: Arc<moltis_sessions::store::SessionStore>) -> Self {
         self.session_store = Some(store);
         self
     }

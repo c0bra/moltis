@@ -4,7 +4,7 @@ import { chatAddMsg, updateTokenBar } from "./chat-ui.js";
 import { formatBytes, formatTokens, renderMarkdown, sendRpc } from "./helpers.js";
 import { bindModelComboEvents, setSessionModel } from "./models.js";
 import { registerPrefix, sessionPath } from "./router.js";
-import { bindSandboxToggleEvents, updateSandboxUI } from "./sandbox.js";
+import { bindSandboxImageEvents, bindSandboxToggleEvents, updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
 import { bumpSessionCount, setSessionReplying, switchSession } from "./sessions.js";
 import * as S from "./state.js";
 
@@ -482,6 +482,13 @@ var chatPageHTML =
 	'<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="14" height="14" style="flex-shrink:0;"><path d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>' +
 	'<span id="sandboxLabel">sandboxed</span>' +
 	"</button>" +
+	'<div style="position:relative;display:inline-block">' +
+	'<button id="sandboxImageBtn" class="text-xs border border-[var(--border)] px-2 py-1 rounded-md transition-colors cursor-pointer bg-transparent font-[var(--font-body)]" style="display:inline-flex;align-items:center;gap:4px;color:var(--muted);" title="Sandbox image">' +
+	'<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="14" height="14" style="flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/></svg>' +
+	'<span id="sandboxImageLabel" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">ubuntu:25.10</span>' +
+	"</button>" +
+	'<div id="sandboxImageDropdown" class="hidden" style="position:absolute;top:100%;left:0;z-index:50;margin-top:4px;min-width:200px;max-height:300px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.15);"></div>' +
+	"</div>" +
 	"</div>" +
 	'<div class="p-4 flex flex-col gap-2" id="messages" style="overflow-y:auto;min-height:0"></div>' +
 	'<div id="tokenBar" class="token-bar"></div>' +
@@ -516,6 +523,12 @@ registerPrefix(
 		S.setSandboxLabel(S.$("sandboxLabel"));
 		bindSandboxToggleEvents();
 		updateSandboxUI(true);
+
+		S.setSandboxImageBtn(S.$("sandboxImageBtn"));
+		S.setSandboxImageLabel(S.$("sandboxImageLabel"));
+		S.setSandboxImageDropdown(S.$("sandboxImageDropdown"));
+		bindSandboxImageEvents();
+		updateSandboxImageUI(null);
 
 		if (S.models.length > 0 && S.modelComboLabel) {
 			var found = S.models.find((m) => m.id === S.selectedModelId);

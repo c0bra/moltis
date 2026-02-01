@@ -136,6 +136,7 @@ mod tests {
             compatibility: None,
             allowed_tools: vec![],
             homepage: None,
+            dockerfile: None,
             requires: Default::default(),
             path: std::path::PathBuf::from("/skills/commit"),
             source: None,

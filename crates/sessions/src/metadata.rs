@@ -30,6 +30,8 @@ pub struct SessionEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_binding: Option<String>,
 }
 
@@ -96,6 +98,7 @@ impl SessionMetadata {
                 archived: false,
                 worktree_branch: None,
                 sandbox_enabled: None,
+                sandbox_image: None,
                 channel_binding: None,
             })
     }
@@ -128,6 +131,14 @@ impl SessionMetadata {
     pub fn set_worktree_branch(&mut self, key: &str, branch: Option<String>) {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.worktree_branch = branch;
+            entry.updated_at = now_ms();
+        }
+    }
+
+    /// Set the sandbox_image for a session.
+    pub fn set_sandbox_image(&mut self, key: &str, image: Option<String>) {
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.sandbox_image = image;
             entry.updated_at = now_ms();
         }
     }
@@ -181,6 +192,7 @@ struct SessionRow {
     archived: i32,
     worktree_branch: Option<String>,
     sandbox_enabled: Option<i32>,
+    sandbox_image: Option<String>,
     channel_binding: Option<String>,
 }
 
@@ -198,6 +210,7 @@ impl From<SessionRow> for SessionEntry {
             archived: r.archived != 0,
             worktree_branch: r.worktree_branch,
             sandbox_enabled: r.sandbox_enabled.map(|v| v != 0),
+            sandbox_image: r.sandbox_image,
             channel_binding: r.channel_binding,
         }
     }
@@ -235,6 +248,11 @@ impl SqliteSessionMetadata {
             .ok(); // ignore if column already exists
 
         sqlx::query("ALTER TABLE sessions ADD COLUMN channel_binding TEXT")
+            .execute(pool)
+            .await
+            .ok(); // ignore if column already exists
+
+        sqlx::query("ALTER TABLE sessions ADD COLUMN sandbox_image TEXT")
             .execute(pool)
             .await
             .ok(); // ignore if column already exists
@@ -325,6 +343,17 @@ impl SqliteSessionMetadata {
         let now = now_ms() as i64;
         sqlx::query("UPDATE sessions SET project_id = ?, updated_at = ? WHERE key = ?")
             .bind(&project_id)
+            .bind(now)
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .ok();
+    }
+
+    pub async fn set_sandbox_image(&self, key: &str, image: Option<String>) {
+        let now = now_ms() as i64;
+        sqlx::query("UPDATE sessions SET sandbox_image = ?, updated_at = ? WHERE key = ?")
+            .bind(&image)
             .bind(now)
             .bind(key)
             .execute(&self.pool)
@@ -672,6 +701,53 @@ mod tests {
 
         meta.set_worktree_branch("main", None).await;
         assert!(meta.get("main").await.unwrap().worktree_branch.is_none());
+    }
+
+    #[test]
+    fn test_sandbox_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.json");
+        let mut meta = SessionMetadata::load(path.clone()).unwrap();
+
+        meta.upsert("main", None);
+        assert!(meta.get("main").unwrap().sandbox_image.is_none());
+
+        meta.set_sandbox_image("main", Some("custom:latest".to_string()));
+        assert_eq!(
+            meta.get("main").unwrap().sandbox_image.as_deref(),
+            Some("custom:latest")
+        );
+
+        meta.set_sandbox_image("main", None);
+        assert!(meta.get("main").unwrap().sandbox_image.is_none());
+
+        // Round-trip through save/load.
+        meta.set_sandbox_image("main", Some("alpine:3.20".to_string()));
+        meta.save().unwrap();
+        let reloaded = SessionMetadata::load(path).unwrap();
+        assert_eq!(
+            reloaded.get("main").unwrap().sandbox_image.as_deref(),
+            Some("alpine:3.20")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_sandbox_image() {
+        let pool = sqlite_pool().await;
+        let meta = SqliteSessionMetadata::new(pool);
+
+        meta.upsert("main", None).await.unwrap();
+        assert!(meta.get("main").await.unwrap().sandbox_image.is_none());
+
+        meta.set_sandbox_image("main", Some("custom:latest".to_string()))
+            .await;
+        assert_eq!(
+            meta.get("main").await.unwrap().sandbox_image.as_deref(),
+            Some("custom:latest")
+        );
+
+        meta.set_sandbox_image("main", None).await;
+        assert!(meta.get("main").await.unwrap().sandbox_image.is_none());
     }
 
     #[test]

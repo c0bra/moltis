@@ -44,6 +44,10 @@ export var projectDropdownList = null;
 export var sandboxToggleBtn = null;
 export var sandboxLabel = null;
 export var sessionSandboxEnabled = true;
+export var sessionSandboxImage = null;
+export var sandboxImageBtn = null;
+export var sandboxImageDropdown = null;
+export var sandboxImageLabel = null;
 
 // Chat page DOM refs
 export var chatMsgBox = null;
@@ -183,6 +187,18 @@ export function setSandboxLabel(v) {
 }
 export function setSessionSandboxEnabled(v) {
 	sessionSandboxEnabled = v;
+}
+export function setSessionSandboxImage(v) {
+	sessionSandboxImage = v;
+}
+export function setSandboxImageBtn(v) {
+	sandboxImageBtn = v;
+}
+export function setSandboxImageDropdown(v) {
+	sandboxImageDropdown = v;
+}
+export function setSandboxImageLabel(v) {
+	sandboxImageLabel = v;
 }
 export function setChatMsgBox(v) {
 	chatMsgBox = v;

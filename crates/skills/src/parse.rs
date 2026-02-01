@@ -431,6 +431,27 @@ Body.
     }
 
     #[test]
+    fn test_dockerfile_field() {
+        let content = r#"---
+name: docker-skill
+description: Needs a custom image
+dockerfile: Dockerfile
+---
+
+Body.
+"#;
+        let meta = parse_metadata(content, Path::new("/tmp/docker-skill")).unwrap();
+        assert_eq!(meta.dockerfile.as_deref(), Some("Dockerfile"));
+    }
+
+    #[test]
+    fn test_dockerfile_field_absent() {
+        let content = "---\nname: simple\ndescription: no docker\n---\nBody.\n";
+        let meta = parse_metadata(content, Path::new("/tmp/simple")).unwrap();
+        assert!(meta.dockerfile.is_none());
+    }
+
+    #[test]
     fn test_no_requires_is_default() {
         let content = "---\nname: simple\ndescription: no deps\n---\nBody.\n";
         let meta = parse_metadata(content, Path::new("/tmp/simple")).unwrap();

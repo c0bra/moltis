@@ -103,6 +103,9 @@ pub struct SkillMetadata {
     /// Tools this skill is allowed to use (space-delimited in spec, parsed as list).
     #[serde(default, alias = "allowed-tools")]
     pub allowed_tools: Vec<String>,
+    /// Optional Dockerfile (relative to skill directory) for sandbox environment.
+    #[serde(default)]
+    pub dockerfile: Option<String>,
     /// Binary/tool requirements for this skill.
     #[serde(default)]
     pub requires: SkillRequirements,

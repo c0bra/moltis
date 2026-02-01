@@ -9,5 +9,6 @@
 pub mod approval;
 pub mod cron_tool;
 pub mod exec;
+pub mod image_cache;
 pub mod policy;
 pub mod sandbox;

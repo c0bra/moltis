@@ -19,6 +19,8 @@ pub struct Project {
     #[serde(default)]
     pub branch_prefix: Option<String>,
     #[serde(default)]
+    pub sandbox_image: Option<String>,
+    #[serde(default)]
     pub detected: bool,
     pub created_at: u64,
     pub updated_at: u64,
@@ -81,6 +83,7 @@ mod tests {
             setup_command: None,
             teardown_command: None,
             branch_prefix: None,
+            sandbox_image: None,
             detected: false,
             created_at: 0,
             updated_at: 0,

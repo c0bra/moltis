@@ -77,6 +77,7 @@ impl SessionService for LiveSessionService {
                 "messageCount": e.message_count,
                 "projectId": e.project_id,
                 "sandbox_enabled": e.sandbox_enabled,
+                "sandbox_image": e.sandbox_image,
                 "worktree_branch": e.worktree_branch,
                 "channelBinding": e.channel_binding,
                 "activeChannel": active_channel,
@@ -125,6 +126,7 @@ impl SessionService for LiveSessionService {
                 "projectId": entry.project_id,
                 "archived": entry.archived,
                 "sandbox_enabled": entry.sandbox_enabled,
+                "sandbox_image": entry.sandbox_image,
                 "worktree_branch": entry.worktree_branch,
             },
             "history": history,
@@ -179,6 +181,26 @@ impl SessionService for LiveSessionService {
                 .await;
         }
 
+        // Update sandbox_image if provided.
+        if params.get("sandbox_image").is_some() {
+            let sandbox_image = params
+                .get("sandbox_image")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            self.metadata
+                .set_sandbox_image(key, sandbox_image.clone())
+                .await;
+            // Push image override to sandbox router.
+            if let Some(ref router) = self.sandbox_router {
+                if let Some(ref img) = sandbox_image {
+                    router.set_image_override(key, img.clone()).await;
+                } else {
+                    router.remove_image_override(key).await;
+                }
+            }
+        }
+
         // Update sandbox_enabled if provided.
         if params.get("sandbox_enabled").is_some() {
             let sandbox_enabled = params.get("sandbox_enabled").and_then(|v| v.as_bool());
@@ -202,6 +224,7 @@ impl SessionService for LiveSessionService {
             "label": entry.label,
             "model": entry.model,
             "sandbox_enabled": entry.sandbox_enabled,
+            "sandbox_image": entry.sandbox_image,
             "worktree_branch": entry.worktree_branch,
         }))
     }

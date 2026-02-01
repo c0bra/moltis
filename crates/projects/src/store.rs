@@ -132,13 +132,15 @@ impl SqliteProjectStore {
             .execute(pool)
             .await
             .ok();
+        sqlx::query("ALTER TABLE projects ADD COLUMN sandbox_image TEXT")
+            .execute(pool)
+            .await
+            .ok();
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at)",
-        )
-        .execute(pool)
-        .await
-        .ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at)")
+            .execute(pool)
+            .await
+            .ok();
 
         Ok(())
     }
@@ -164,8 +166,8 @@ impl ProjectStore for SqliteProjectStore {
 
     async fn upsert(&self, project: Project) -> Result<()> {
         sqlx::query(
-            r#"INSERT INTO projects (id, label, directory, system_prompt, auto_worktree, setup_command, teardown_command, branch_prefix, detected, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            r#"INSERT INTO projects (id, label, directory, system_prompt, auto_worktree, setup_command, teardown_command, branch_prefix, sandbox_image, detected, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  label = excluded.label,
                  directory = excluded.directory,
@@ -174,6 +176,7 @@ impl ProjectStore for SqliteProjectStore {
                  setup_command = excluded.setup_command,
                  teardown_command = excluded.teardown_command,
                  branch_prefix = excluded.branch_prefix,
+                 sandbox_image = excluded.sandbox_image,
                  detected = excluded.detected,
                  updated_at = excluded.updated_at"#,
         )
@@ -185,6 +188,7 @@ impl ProjectStore for SqliteProjectStore {
         .bind(&project.setup_command)
         .bind(&project.teardown_command)
         .bind(&project.branch_prefix)
+        .bind(&project.sandbox_image)
         .bind(project.detected as i32)
         .bind(project.created_at as i64)
         .bind(project.updated_at as i64)
@@ -213,6 +217,7 @@ struct ProjectRow {
     setup_command: Option<String>,
     teardown_command: Option<String>,
     branch_prefix: Option<String>,
+    sandbox_image: Option<String>,
     detected: i32,
     created_at: i64,
     updated_at: i64,
@@ -229,6 +234,7 @@ impl From<ProjectRow> for Project {
             setup_command: r.setup_command,
             teardown_command: r.teardown_command,
             branch_prefix: r.branch_prefix,
+            sandbox_image: r.sandbox_image,
             detected: r.detected != 0,
             created_at: r.created_at as u64,
             updated_at: r.updated_at as u64,
@@ -248,6 +254,7 @@ pub fn new_project(id: String, label: String, directory: PathBuf) -> Project {
         setup_command: None,
         teardown_command: None,
         branch_prefix: None,
+        sandbox_image: None,
         detected: false,
         created_at: now,
         updated_at: now,

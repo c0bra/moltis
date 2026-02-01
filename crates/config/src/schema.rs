@@ -129,6 +129,9 @@ pub struct SandboxConfig {
     pub image: Option<String>,
     pub container_prefix: Option<String>,
     pub no_network: bool,
+    /// Backend: "auto" (default), "docker", or "apple-container".
+    /// "auto" prefers Apple Container on macOS when available, falls back to Docker.
+    pub backend: String,
     pub resource_limits: ResourceLimitsConfig,
 }
 
@@ -141,6 +144,7 @@ impl Default for SandboxConfig {
             image: None,
             container_prefix: None,
             no_network: true,
+            backend: "auto".into(),
             resource_limits: ResourceLimitsConfig::default(),
         }
     }

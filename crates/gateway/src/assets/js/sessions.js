@@ -13,7 +13,7 @@ import { formatTokens, renderMarkdown, sendRpc } from "./helpers.js";
 import { makeChatIcon, makeTelegramIcon } from "./icons.js";
 import { updateSessionProjectSelect } from "./project-combo.js";
 import { currentPrefix, navigate, sessionPath } from "./router.js";
-import { updateSandboxUI } from "./sandbox.js";
+import { updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
 import * as S from "./state.js";
 
 // ── Fetch & render ──────────────────────────────────────────
@@ -218,6 +218,7 @@ function restoreSessionState(entry, projectId) {
 		}
 	}
 	updateSandboxUI(entry.sandbox_enabled !== false);
+	updateSandboxImageUI(entry.sandbox_image || null);
 }
 
 function renderHistoryUserMessage(msg) {
