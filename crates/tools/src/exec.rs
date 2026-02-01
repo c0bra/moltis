@@ -217,24 +217,37 @@ impl AgentTool for ExecTool {
             .unwrap_or(self.default_timeout.as_secs())
             .min(1800); // cap at 30 minutes
 
-        let working_dir = params
-            .get("working_dir")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| self.working_dir.clone())
-            .or_else(|| std::env::current_dir().ok());
-
-        info!(command, timeout_secs, ?working_dir, "exec tool invoked");
-
-        // Skip approval when the session runs inside a sandbox — the sandbox
-        // itself is the security boundary.
+        // Check sandbox state early — we need it for working_dir resolution.
         let session_key = params.get("_session_key").and_then(|v| v.as_str());
         let is_sandboxed = if let Some(ref router) = self.sandbox_router {
             router.is_sandboxed(session_key.unwrap_or("main")).await
         } else {
             false
         };
+
+        // Resolve working directory.  When sandboxed the host CWD doesn't exist
+        // inside the container, so default to "/" instead.
+        let working_dir = params
+            .get("working_dir")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| self.working_dir.clone())
+            .or_else(|| {
+                if is_sandboxed {
+                    Some(PathBuf::from("/"))
+                } else {
+                    std::env::current_dir().ok()
+                }
+            });
+
+        info!(
+            command,
+            timeout_secs,
+            ?working_dir,
+            is_sandboxed,
+            "exec tool invoked"
+        );
 
         // Approval gating.
         if !is_sandboxed && let Some(ref mgr) = self.approval_manager {
@@ -273,8 +286,6 @@ impl AgentTool for ExecTool {
         };
 
         // Resolve sandbox: dynamic per-session router takes priority over static sandbox.
-        let session_key = params.get("_session_key").and_then(|v| v.as_str());
-
         let result = if let Some(ref router) = self.sandbox_router {
             let sk = session_key.unwrap_or("main");
             if router.is_sandboxed(sk).await {
