@@ -519,7 +519,7 @@ async fn localhost_set_password_without_current() {
     assert_eq!(resp.status(), 200);
 
     // Password should now be set.
-    assert!(store.has_password_set().await.unwrap());
+    assert!(store.has_password().await.unwrap());
     assert!(store.verify_password("newpass123").await.unwrap());
 }
 

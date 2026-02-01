@@ -855,9 +855,10 @@ registerPrefix(
 		mounted = true;
 		containerRef = container;
 		container.style.cssText = "flex-direction:row;padding:0;overflow:hidden;";
-		var section = param && sections.some((s) => s.id === param) ? param : "identity";
+		var isValidSection = param && sections.some((s) => s.id === param);
+		var section = isValidSection ? param : "identity";
 		activeSection.value = section;
-		if (!(param && sections.some((s) => s.id === param))) {
+		if (!isValidSection) {
 			history.replaceState(null, "", `/settings/${section}`);
 		}
 		render(html`<${SettingsPage} />`, container);

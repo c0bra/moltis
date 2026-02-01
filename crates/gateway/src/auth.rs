@@ -165,12 +165,8 @@ impl CredentialStore {
         Ok(())
     }
 
-    /// Whether a password has been set (public, for status endpoint).
-    pub async fn has_password_set(&self) -> anyhow::Result<bool> {
-        self.has_password().await
-    }
-
-    async fn has_password(&self) -> anyhow::Result<bool> {
+    /// Whether a password has been set.
+    pub async fn has_password(&self) -> anyhow::Result<bool> {
         let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM auth_password WHERE id = 1")
             .fetch_optional(&self.pool)
             .await?;

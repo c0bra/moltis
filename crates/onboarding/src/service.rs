@@ -143,33 +143,25 @@ impl LiveOnboardingService {
             MoltisConfig::default()
         };
 
-        if let Some(v) = params.get("name").and_then(|v| v.as_str()) {
-            config.identity.name = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        /// Extract an optional non-empty string from JSON, mapping `""` to `None`.
+        fn str_field(params: &Value, key: &str) -> Option<Option<String>> {
+            params
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|v| (!v.is_empty()).then(|| v.to_string()))
         }
-        if let Some(v) = params.get("emoji").and_then(|v| v.as_str()) {
-            config.identity.emoji = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+
+        if let Some(v) = str_field(&params, "name") {
+            config.identity.name = v;
         }
-        if let Some(v) = params.get("creature").and_then(|v| v.as_str()) {
-            config.identity.creature = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        if let Some(v) = str_field(&params, "emoji") {
+            config.identity.emoji = v;
         }
-        if let Some(v) = params.get("vibe").and_then(|v| v.as_str()) {
-            config.identity.vibe = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        if let Some(v) = str_field(&params, "creature") {
+            config.identity.creature = v;
+        }
+        if let Some(v) = str_field(&params, "vibe") {
+            config.identity.vibe = v;
         }
         if let Some(v) = params.get("soul") {
             config.identity.soul = if v.is_null() {
@@ -178,12 +170,8 @@ impl LiveOnboardingService {
                 v.as_str().map(|s| s.to_string()).filter(|s| !s.is_empty())
             };
         }
-        if let Some(v) = params.get("user_name").and_then(|v| v.as_str()) {
-            config.user.name = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        if let Some(v) = str_field(&params, "user_name") {
+            config.user.name = v;
         }
 
         self.save(&config)?;

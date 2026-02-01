@@ -74,28 +74,16 @@ async fn status_handler(
 ) -> impl IntoResponse {
     let auth_disabled = state.credential_store.is_auth_disabled();
     let localhost_only = state.gateway_state.localhost_only;
-    let has_password = state
-        .credential_store
-        .has_password_set()
-        .await
-        .unwrap_or(false);
+    let has_password = state.credential_store.has_password().await.unwrap_or(false);
     let has_passkeys = state.credential_store.has_passkeys().await.unwrap_or(false);
 
-    // Determine authenticated status:
-    // - auth_disabled → pass-through
-    // - localhost with no password → auto-authenticated
-    // - otherwise → check session cookie
-    let authenticated = if auth_disabled || (localhost_only && !has_password) {
+    // Localhost with no password is treated as fully open (no auth needed).
+    let auth_bypassed = auth_disabled || (localhost_only && !has_password);
+
+    let authenticated = if auth_bypassed {
         true
     } else {
-        let cookie_header = headers
-            .get(axum::http::header::COOKIE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let token = crate::auth_middleware::parse_cookie(
-            cookie_header,
-            crate::auth_middleware::SESSION_COOKIE,
-        );
+        let token = extract_session_token(&headers);
         match token {
             Some(t) => state
                 .credential_store
@@ -106,11 +94,7 @@ async fn status_handler(
         }
     };
 
-    // setup_required: only when auth isn't disabled and it's not the
-    // localhost-no-password case.
-    let setup_required = !auth_disabled
-        && !(localhost_only && !has_password)
-        && !state.credential_store.is_setup_complete();
+    let setup_required = !auth_bypassed && !state.credential_store.is_setup_complete();
 
     let setup_code_required = state.gateway_state.setup_code.read().await.is_some();
 
@@ -151,41 +135,28 @@ async fn setup_handler(
 
     let password = body.password.unwrap_or_default();
 
-    // On localhost, allow empty password (skip setup without setting one).
     if password.is_empty() && state.gateway_state.localhost_only {
-        // Clear auth_disabled (e.g. from a previous reset) and setup code.
+        // Localhost with no password: skip setup without setting one.
         state.credential_store.clear_auth_disabled();
-        *state.gateway_state.setup_code.write().await = None;
-        return match state.credential_store.create_session().await {
-            Ok(token) => session_response(token),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create session: {e}"),
+    } else {
+        if password.len() < 8 {
+            return (
+                StatusCode::BAD_REQUEST,
+                "password must be at least 8 characters",
             )
-                .into_response(),
-        };
+                .into_response();
+        }
+        if let Err(e) = state.credential_store.set_initial_password(&password).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to set password: {e}"),
+            )
+                .into_response();
+        }
     }
 
-    if password.len() < 8 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "password must be at least 8 characters",
-        )
-            .into_response();
-    }
-
-    if let Err(e) = state.credential_store.set_initial_password(&password).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to set password: {e}"),
-        )
-            .into_response();
-    }
-
-    // Clear setup code after successful setup.
+    // Clear setup code and create session.
     *state.gateway_state.setup_code.write().await = None;
-
-    // Create session and set cookie.
     match state.credential_store.create_session().await {
         Ok(token) => session_response(token),
         Err(e) => (
@@ -276,11 +247,7 @@ async fn change_password_handler(
             .into_response();
     }
 
-    let has_password = state
-        .credential_store
-        .has_password_set()
-        .await
-        .unwrap_or(false);
+    let has_password = state.credential_store.has_password().await.unwrap_or(false);
 
     if !has_password {
         // No password set yet — use set_initial_password (no current password needed).

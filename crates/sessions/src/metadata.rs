@@ -81,11 +81,11 @@ impl SessionMetadata {
         self.entries
             .entry(key.to_string())
             .and_modify(|e| {
-                if let Some(ref l) = label {
-                    if e.label.as_deref() != Some(l) {
-                        e.label = label.clone();
-                        e.updated_at = now;
-                    }
+                if let Some(ref l) = label
+                    && e.label.as_deref() != Some(l)
+                {
+                    e.label = label.clone();
+                    e.updated_at = now;
                 }
             })
             .or_insert_with(|| SessionEntry {
