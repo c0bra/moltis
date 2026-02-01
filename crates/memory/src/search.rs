@@ -51,6 +51,25 @@ pub async fn hybrid_search(
     Ok(final_results)
 }
 
+/// Keyword-only search when no embedding provider is available.
+pub async fn keyword_only_search(
+    store: &dyn MemoryStore,
+    query: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<SearchResult>> {
+    let mut results = store.keyword_search(query, limit).await?;
+
+    for result in &mut results {
+        if result.text.is_empty()
+            && let Some(chunk) = store.get_chunk_by_id(&result.chunk_id).await?
+        {
+            result.text = chunk.text;
+        }
+    }
+
+    Ok(results)
+}
+
 /// Merge vector and keyword results with weighted scores. Deduplicates by chunk_id.
 fn merge_results(
     vector: &[SearchResult],

@@ -98,6 +98,11 @@ impl LiveChatService {
         self
     }
 
+    pub fn with_hooks_arc(mut self, registry: Arc<moltis_common::hooks::HookRegistry>) -> Self {
+        self.hook_registry = Some(registry);
+        self
+    }
+
     fn has_tools(&self) -> bool {
         !self.tool_registry.list_schemas().is_empty()
     }
@@ -599,6 +604,17 @@ impl ChatService for LiveChatService {
             return Err("nothing to compact".into());
         }
 
+        // Dispatch BeforeCompaction hook.
+        if let Some(ref hooks) = self.hook_registry {
+            let payload = moltis_common::hooks::HookPayload::BeforeCompaction {
+                session_key: session_key.clone(),
+                message_count: history.len(),
+            };
+            if let Err(e) = hooks.dispatch(&payload).await {
+                warn!(session = %session_key, error = %e, "BeforeCompaction hook failed");
+            }
+        }
+
         // Build a summary prompt from the conversation.
         let mut summary_messages: Vec<serde_json::Value> = Vec::new();
         summary_messages.push(serde_json::json!({
@@ -671,6 +687,46 @@ impl ChatService for LiveChatService {
             .map_err(|e| e.to_string())?;
 
         self.session_metadata.touch(&session_key, 1).await;
+
+        // Save compaction summary to memory file and trigger sync.
+        if let Some(ref mm) = self.state.memory_manager {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let memory_dir = cwd.join("memory");
+            if let Err(e) = tokio::fs::create_dir_all(&memory_dir).await {
+                warn!(error = %e, "compact: failed to create memory dir");
+            } else {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let filename = format!("compaction-{}-{ts}.md", session_key);
+                let path = memory_dir.join(&filename);
+                let content = format!(
+                    "# Compaction Summary\n\n- **Session**: {session_key}\n- **Timestamp**: {ts}\n\n{summary}"
+                );
+                if let Err(e) = tokio::fs::write(&path, &content).await {
+                    warn!(error = %e, "compact: failed to write memory file");
+                } else {
+                    let mm = Arc::clone(mm);
+                    tokio::spawn(async move {
+                        if let Err(e) = mm.sync().await {
+                            tracing::warn!("compact: memory sync failed: {e}");
+                        }
+                    });
+                }
+            }
+        }
+
+        // Dispatch AfterCompaction hook.
+        if let Some(ref hooks) = self.hook_registry {
+            let payload = moltis_common::hooks::HookPayload::AfterCompaction {
+                session_key: session_key.clone(),
+                summary_len: summary.len(),
+            };
+            if let Err(e) = hooks.dispatch(&payload).await {
+                warn!(session = %session_key, error = %e, "AfterCompaction hook failed");
+            }
+        }
 
         info!(session = %session_key, "chat.compact: done");
         Ok(serde_json::json!(compacted))

@@ -164,6 +164,10 @@ pub struct GatewayState {
     /// send, we queue the reply target so the "final" response can be routed
     /// back to the originating channel.
     pub channel_reply_queue: RwLock<HashMap<String, Vec<ChannelReplyTarget>>>,
+    /// Hook registry for dispatching lifecycle events.
+    pub hook_registry: Option<Arc<moltis_common::hooks::HookRegistry>>,
+    /// Memory manager for long-term memory search (None if no embedding provider).
+    pub memory_manager: Option<Arc<moltis_memory::manager::MemoryManager>>,
 }
 
 impl GatewayState {
@@ -180,6 +184,17 @@ impl GatewayState {
         services: GatewayServices,
         approval_manager: Arc<ApprovalManager>,
         sandbox_router: Option<Arc<SandboxRouter>>,
+    ) -> Arc<Self> {
+        Self::full(auth, services, approval_manager, sandbox_router, None, None)
+    }
+
+    pub fn full(
+        auth: ResolvedAuth,
+        services: GatewayServices,
+        approval_manager: Arc<ApprovalManager>,
+        sandbox_router: Option<Arc<SandboxRouter>>,
+        hook_registry: Option<Arc<moltis_common::hooks::HookRegistry>>,
+        memory_manager: Option<Arc<moltis_memory::manager::MemoryManager>>,
     ) -> Arc<Self> {
         let hostname = hostname::get()
             .ok()
@@ -203,6 +218,8 @@ impl GatewayState {
             active_projects: RwLock::new(HashMap::new()),
             sandbox_router,
             channel_reply_queue: RwLock::new(HashMap::new()),
+            hook_registry,
+            memory_manager,
         })
     }
 

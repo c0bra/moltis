@@ -19,7 +19,7 @@ use crate::{
 pub struct MemoryManager {
     config: MemoryConfig,
     store: Box<dyn MemoryStore>,
-    embedder: Box<dyn EmbeddingProvider>,
+    embedder: Option<Box<dyn EmbeddingProvider>>,
 }
 
 /// Status info about the memory system.
@@ -31,6 +31,7 @@ pub struct MemoryStatus {
 }
 
 impl MemoryManager {
+    /// Create a memory manager with an embedding provider for hybrid (vector + keyword) search.
     pub fn new(
         config: MemoryConfig,
         store: Box<dyn MemoryStore>,
@@ -39,8 +40,22 @@ impl MemoryManager {
         Self {
             config,
             store,
-            embedder,
+            embedder: Some(embedder),
         }
+    }
+
+    /// Create a memory manager without embeddings. Keyword (FTS) search only.
+    pub fn keyword_only(config: MemoryConfig, store: Box<dyn MemoryStore>) -> Self {
+        Self {
+            config,
+            store,
+            embedder: None,
+        }
+    }
+
+    /// Whether this manager has an embedding provider for vector search.
+    pub fn has_embeddings(&self) -> bool {
+        self.embedder.is_some()
     }
 
     /// Synchronize: walk configured directories, detect changed files, re-chunk and re-embed.
@@ -141,18 +156,26 @@ impl MemoryManager {
         // Delete old chunks
         self.store.delete_chunks_for_file(path_str).await?;
 
-        // Generate embeddings and create chunk rows
+        // Generate embeddings (if provider available) and create chunk rows.
         let texts: Vec<String> = raw_chunks.iter().map(|c| c.text.clone()).collect();
-        let embeddings = self.embedder.embed_batch(&texts).await?;
+        let (embeddings, model_name) = if let Some(ref embedder) = self.embedder {
+            let embs = embedder.embed_batch(&texts).await?;
+            (Some(embs), embedder.model_name().to_string())
+        } else {
+            (None, String::new())
+        };
 
-        let model_name = self.embedder.model_name().to_string();
         let chunk_rows: Vec<ChunkRow> = raw_chunks
             .iter()
-            .zip(embeddings.iter())
             .enumerate()
-            .map(|(i, (chunk, emb))| {
+            .map(|(i, chunk)| {
                 let chunk_hash = sha256_hex(&chunk.text);
-                let emb_blob: Vec<u8> = emb.iter().flat_map(|f| f.to_le_bytes()).collect();
+                let emb_blob = embeddings.as_ref().map(|embs| {
+                    embs[i]
+                        .iter()
+                        .flat_map(|f| f.to_le_bytes())
+                        .collect::<Vec<u8>>()
+                });
                 ChunkRow {
                     id: format!("{}:{}", path_str, i),
                     path: path_str.to_string(),
@@ -162,7 +185,7 @@ impl MemoryManager {
                     hash: chunk_hash,
                     model: model_name.clone(),
                     text: chunk.text.clone(),
-                    embedding: Some(emb_blob),
+                    embedding: emb_blob,
                     updated_at: chrono_now(),
                 }
             })
@@ -174,17 +197,22 @@ impl MemoryManager {
         Ok(true)
     }
 
-    /// Search memory using hybrid vector + keyword search.
+    /// Search memory. Uses hybrid (vector + keyword) when embeddings are available,
+    /// falls back to keyword-only search otherwise.
     pub async fn search(&self, query: &str, limit: usize) -> anyhow::Result<Vec<SearchResult>> {
-        search::hybrid_search(
-            self.store.as_ref(),
-            self.embedder.as_ref(),
-            query,
-            limit,
-            self.config.vector_weight,
-            self.config.keyword_weight,
-        )
-        .await
+        if let Some(ref embedder) = self.embedder {
+            search::hybrid_search(
+                self.store.as_ref(),
+                embedder.as_ref(),
+                query,
+                limit,
+                self.config.vector_weight,
+                self.config.keyword_weight,
+            )
+            .await
+        } else {
+            search::keyword_only_search(self.store.as_ref(), query, limit).await
+        }
     }
 
     /// Get a specific chunk by ID.
@@ -203,7 +231,11 @@ impl MemoryManager {
         Ok(MemoryStatus {
             total_files: files.len(),
             total_chunks,
-            embedding_model: self.embedder.model_name().to_string(),
+            embedding_model: self
+                .embedder
+                .as_ref()
+                .map(|e| e.model_name().to_string())
+                .unwrap_or_else(|| "none (keyword-only)".into()),
         })
     }
 }
@@ -513,6 +545,53 @@ mod tests {
                 r.text.chars().take(80).collect::<String>()
             );
         }
+    }
+
+    /// Keyword-only mode: sync and search without any embedding provider.
+    #[tokio::test]
+    async fn test_keyword_only_mode() {
+        let tmp = TempDir::new().unwrap();
+        let mem_dir = tmp.path().join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let config = MemoryConfig {
+            db_path: ":memory:".into(),
+            memory_dirs: vec![mem_dir.clone()],
+            chunk_size: 50,
+            chunk_overlap: 10,
+            ..Default::default()
+        };
+
+        let store = Box::new(SqliteMemoryStore::new(pool));
+        let manager = MemoryManager::keyword_only(config, store);
+
+        assert!(!manager.has_embeddings());
+
+        // Write a test file and sync (should work without embeddings).
+        std::fs::write(
+            mem_dir.join("note.md"),
+            "Rust programming is great for building fast systems.",
+        )
+        .unwrap();
+
+        let report = manager.sync().await.unwrap();
+        assert_eq!(report.files_updated, 1);
+
+        let status = manager.status().await.unwrap();
+        assert_eq!(status.total_files, 1);
+        assert!(status.total_chunks > 0);
+        assert_eq!(status.embedding_model, "none (keyword-only)");
+
+        // Keyword search should still work.
+        let results = manager.search("programming", 5).await.unwrap();
+        assert!(
+            !results.is_empty(),
+            "keyword-only search should find results"
+        );
+        assert!(results[0].text.contains("programming"));
     }
 
     #[test]

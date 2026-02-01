@@ -19,6 +19,7 @@ moltis-common         = { workspace = true }
 moltis-config         = { workspace = true }
 moltis-cron           = { workspace = true }
 moltis-media          = { workspace = true }
+moltis-memory         = { workspace = true }
 moltis-oauth          = { workspace = true }
 moltis-onboarding     = { workspace = true }
 moltis-plugins        = { workspace = true }

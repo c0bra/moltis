@@ -97,6 +97,19 @@ pub fn build_system_prompt_with_session(
         prompt.push_str(&moltis_skills::prompt_gen::generate_skills_prompt(skills));
     }
 
+    // If memory tools are registered, add a hint about them.
+    let has_memory = tool_schemas
+        .iter()
+        .any(|s| s["name"].as_str() == Some("memory_search"));
+    if has_memory {
+        prompt.push_str(concat!(
+            "## Long-Term Memory\n\n",
+            "You have access to a long-term memory system. Use `memory_search` to recall ",
+            "past conversations, decisions, and context. Search proactively when the user ",
+            "references previous work or when context would help.\n\n",
+        ));
+    }
+
     if !tool_schemas.is_empty() {
         prompt.push_str("## Available Tools\n\n");
         for schema in &tool_schemas {
