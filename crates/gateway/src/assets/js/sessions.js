@@ -121,28 +121,24 @@ export function renderSessionList() {
 	if (S.projectFilterId) {
 		filtered = S.sessions.filter((s) => s.projectId === S.projectFilterId);
 	}
+	var tpl = document.getElementById("tpl-session-item");
 	filtered.forEach((s) => {
-		var item = document.createElement("div");
+		var frag = tpl.content.cloneNode(true);
+		var item = frag.firstElementChild;
 		item.className = `session-item${s.key === S.activeSessionKey ? " active" : ""}`;
 		item.setAttribute("data-session-key", s.key);
 
-		var info = document.createElement("div");
-		info.className = "session-info";
+		var iconWrap = item.querySelector(".session-icon");
+		iconWrap.replaceWith(createSessionIcon(s));
 
-		var label = document.createElement("div");
-		label.className = "session-label";
-		label.style.display = "flex";
-		label.style.alignItems = "center";
-		label.style.gap = "5px";
-		label.appendChild(createSessionIcon(s));
-		var labelText = document.createElement("span");
-		labelText.textContent = s.label || s.key;
-		label.appendChild(labelText);
-		info.appendChild(label);
+		item.querySelector("[data-label-text]").textContent = s.label || s.key;
 
-		info.appendChild(createSessionMeta(s));
-		item.appendChild(info);
-		item.appendChild(createSessionActions(s, sessionList));
+		var meta = item.querySelector(".session-meta");
+		var newMeta = createSessionMeta(s);
+		meta.replaceWith(newMeta);
+
+		var actionsSlot = item.querySelector(".session-actions");
+		actionsSlot.replaceWith(createSessionActions(s, sessionList));
 
 		item.addEventListener("click", () => {
 			if (currentPrefix !== "/chats") {
@@ -256,12 +252,8 @@ function renderHistoryAssistantMessage(msg) {
 }
 
 function makeThinkingDots() {
-	var thinkDots = document.createElement("span");
-	thinkDots.className = "thinking-dots";
-	thinkDots.appendChild(document.createElement("span"));
-	thinkDots.appendChild(document.createElement("span"));
-	thinkDots.appendChild(document.createElement("span"));
-	return thinkDots;
+	var tpl = document.getElementById("tpl-thinking-dots");
+	return tpl.content.cloneNode(true).firstElementChild;
 }
 
 function postHistoryLoadActions(key, searchContext, msgEls, sessionList) {

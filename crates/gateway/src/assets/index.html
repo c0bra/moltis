@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>moltis</title>
-<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/assets/css/base.css">
+<link rel="stylesheet" href="/assets/css/layout.css">
+<link rel="stylesheet" href="/assets/css/chat.css">
+<link rel="stylesheet" href="/assets/css/components.css">
 <link rel="modulepreload" href="/assets/js/app.js">
 <link rel="modulepreload" href="/assets/js/state.js">
 <link rel="modulepreload" href="/assets/js/theme.js">
@@ -124,44 +127,48 @@
   <div id="pageContent" class="flex-1 flex min-w-0"></div>
 </div>
 
-<!-- Provider modal -->
-<div id="providerModal" class="provider-modal-backdrop hidden">
-  <div class="provider-modal">
-    <div class="provider-modal-header">
-      <span class="text-sm font-medium text-[var(--text-strong)]" id="providerModalTitle">Add Provider</span>
-      <button id="providerModalClose" class="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer bg-transparent border-none text-lg leading-none">&times;</button>
-    </div>
-    <div class="provider-modal-body" id="providerModalBody">
-      <!-- Populated by JS -->
-    </div>
-  </div>
-</div>
+<!-- Modals (created on demand by modals.js) -->
+<div id="modalRoot"></div>
 
-<!-- Channel modal -->
-<div id="channelModal" class="provider-modal-backdrop hidden">
-  <div class="provider-modal">
-    <div class="provider-modal-header">
-      <span class="text-sm font-medium text-[var(--text-strong)]" id="channelModalTitle">Add Channel</span>
-      <button id="channelModalClose" class="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer bg-transparent border-none text-lg leading-none">&times;</button>
-    </div>
-    <div class="provider-modal-body" id="channelModalBody">
-      <!-- Populated by JS -->
-    </div>
-  </div>
-</div>
+<!-- Templates -->
+<template id="tpl-thinking-dots">
+  <span class="thinking-dots"><span></span><span></span><span></span></span>
+</template>
 
-<!-- Project modal -->
-<div id="projectModal" class="provider-modal-backdrop hidden">
-  <div class="provider-modal">
-    <div class="provider-modal-header">
-      <span class="text-sm font-medium text-[var(--text-strong)]" id="projectModalTitle">Manage Projects</span>
-      <button id="projectModalClose" class="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer bg-transparent border-none text-lg leading-none">&times;</button>
+<template id="tpl-exec-card">
+  <div class="msg exec-card running">
+    <div class="exec-prompt">
+      <span class="exec-prompt-char">$</span>
+      <span data-cmd></span>
     </div>
-    <div class="provider-modal-body" id="projectModalBody">
-      <!-- Project list populated by JS -->
-    </div>
+    <div class="exec-status">running…</div>
   </div>
-</div>
+</template>
+
+<template id="tpl-approval-card">
+  <div class="msg approval-card">
+    <div class="approval-label">Command requires approval:</div>
+    <code class="approval-cmd"></code>
+    <div class="approval-btns">
+      <button class="approval-btn approval-allow">Allow</button>
+      <button class="approval-btn approval-deny">Deny</button>
+    </div>
+    <div class="approval-countdown"></div>
+  </div>
+</template>
+
+<template id="tpl-session-item">
+  <div class="session-item">
+    <div class="session-info">
+      <div class="session-label" style="display:flex;align-items:center;gap:5px">
+        <span class="session-icon"></span>
+        <span data-label-text></span>
+      </div>
+      <div class="session-meta"></div>
+    </div>
+    <div class="session-actions"></div>
+  </div>
+</template>
 
 <script type="importmap">
 {

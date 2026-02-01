@@ -437,13 +437,19 @@ impl LogsService for LiveLogsService {
                 .and_then(|v| v.as_str())
                 .map(String::from),
         };
-        // Read from the persisted file to include entries from previous runs.
-        // Falls back to the in-memory buffer when persistence is not enabled.
-        let entries = self.buffer.list_from_file(&filter, limit);
-        if entries.is_empty() {
-            let entries = self.buffer.list(&filter, limit);
+        // Fast path: try in-memory ring buffer first (instant, covers current session).
+        let entries = self.buffer.list(&filter, limit);
+        if !entries.is_empty() {
             return Ok(serde_json::json!({ "entries": entries }));
         }
+        // Slow path: fall back to file after restart when memory is empty.
+        // Run on a blocking thread so we don't stall the async runtime.
+        let buffer = self.buffer.clone();
+        let entries = tokio::task::spawn_blocking(move || {
+            buffer.list_from_file(&filter, limit)
+        })
+        .await
+        .unwrap_or_default();
         Ok(serde_json::json!({ "entries": entries }))
     }
 

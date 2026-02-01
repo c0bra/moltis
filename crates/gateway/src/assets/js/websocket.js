@@ -24,12 +24,8 @@ import * as S from "./state.js";
 // ── Chat event handlers ──────────────────────────────────────
 
 function makeThinkingDots() {
-	var thinkDots = document.createElement("span");
-	thinkDots.className = "thinking-dots";
-	thinkDots.appendChild(document.createElement("span"));
-	thinkDots.appendChild(document.createElement("span"));
-	thinkDots.appendChild(document.createElement("span"));
-	return thinkDots;
+	var tpl = document.getElementById("tpl-thinking-dots");
+	return tpl.content.cloneNode(true).firstElementChild;
 }
 
 function handleChatThinking(_p, isActive, isChatPage) {
@@ -63,24 +59,12 @@ function handleChatThinkingDone(_p, isActive, isChatPage) {
 function handleChatToolCallStart(p, isActive, isChatPage) {
 	if (!(isActive && isChatPage)) return;
 	removeThinking();
-	var card = document.createElement("div");
-	card.className = "msg exec-card running";
+	var tpl = document.getElementById("tpl-exec-card");
+	var frag = tpl.content.cloneNode(true);
+	var card = frag.firstElementChild;
 	card.id = `tool-${p.toolCallId}`;
-	var prompt = document.createElement("div");
-	prompt.className = "exec-prompt";
 	var cmd = p.toolName === "exec" && p.arguments && p.arguments.command ? p.arguments.command : p.toolName || "tool";
-	var promptChar = document.createElement("span");
-	promptChar.className = "exec-prompt-char";
-	promptChar.textContent = "$";
-	prompt.appendChild(promptChar);
-	var cmdSpan = document.createElement("span");
-	cmdSpan.textContent = ` ${cmd}`;
-	prompt.appendChild(cmdSpan);
-	card.appendChild(prompt);
-	var spin = document.createElement("div");
-	spin.className = "exec-status";
-	spin.textContent = "running\u2026";
-	card.appendChild(spin);
+	card.querySelector("[data-cmd]").textContent = ` ${cmd}`;
 	S.chatMsgBox.appendChild(card);
 	S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
 }

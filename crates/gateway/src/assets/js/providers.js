@@ -1,25 +1,46 @@
 // ── Provider modal ──────────────────────────────────────
 
 import { sendRpc } from "./helpers.js";
+import { ensureProviderModal } from "./modals.js";
 import { fetchModels } from "./models.js";
 import * as S from "./state.js";
 
-export var providerModal = S.$("providerModal");
-export var providerModalBody = S.$("providerModalBody");
-export var providerModalTitle = S.$("providerModalTitle");
-var providerModalClose = S.$("providerModalClose");
+var _els = null;
+
+function els() {
+	if (!_els) {
+		ensureProviderModal();
+		_els = {
+			modal: S.$("providerModal"),
+			body: S.$("providerModalBody"),
+			title: S.$("providerModalTitle"),
+			close: S.$("providerModalClose"),
+		};
+		_els.close.addEventListener("click", closeProviderModal);
+		_els.modal.addEventListener("click", (e) => {
+			if (e.target === _els.modal) closeProviderModal();
+		});
+	}
+	return _els;
+}
+
+// Re-export for backwards compat with page-providers.js
+export function getProviderModal() {
+	return els().modal;
+}
 
 export function openProviderModal() {
-	providerModal.classList.remove("hidden");
-	providerModalTitle.textContent = "Add Provider";
-	providerModalBody.textContent = "Loading...";
+	var m = els();
+	m.modal.classList.remove("hidden");
+	m.title.textContent = "Add Provider";
+	m.body.textContent = "Loading...";
 	sendRpc("providers.available", {}).then((res) => {
 		if (!res?.ok) {
-			providerModalBody.textContent = "Failed to load providers.";
+			m.body.textContent = "Failed to load providers.";
 			return;
 		}
 		var providers = res.payload || [];
-		providerModalBody.textContent = "";
+		m.body.textContent = "";
 		providers.forEach((p) => {
 			var item = document.createElement("div");
 			item.className = `provider-item${p.configured ? " configured" : ""}`;
@@ -48,18 +69,19 @@ export function openProviderModal() {
 				if (p.authType === "api-key") showApiKeyForm(p);
 				else if (p.authType === "oauth") showOAuthFlow(p);
 			});
-			providerModalBody.appendChild(item);
+			m.body.appendChild(item);
 		});
 	});
 }
 
 export function closeProviderModal() {
-	providerModal.classList.add("hidden");
+	els().modal.classList.add("hidden");
 }
 
 export function showApiKeyForm(provider) {
-	providerModalTitle.textContent = provider.displayName;
-	providerModalBody.textContent = "";
+	var m = els();
+	m.title.textContent = provider.displayName;
+	m.body.textContent = "";
 
 	var form = document.createElement("div");
 	form.className = "provider-key-form";
@@ -97,11 +119,11 @@ export function showApiKeyForm(provider) {
 			apiKey: key,
 		}).then((res) => {
 			if (res?.ok) {
-				providerModalBody.textContent = "";
+				m.body.textContent = "";
 				var status = document.createElement("div");
 				status.className = "provider-status";
 				status.textContent = `${provider.displayName} configured successfully!`;
-				providerModalBody.appendChild(status);
+				m.body.appendChild(status);
 				fetchModels();
 				if (S.refreshProvidersPage) S.refreshProvidersPage();
 				setTimeout(closeProviderModal, 1500);
@@ -117,13 +139,14 @@ export function showApiKeyForm(provider) {
 	});
 	btns.appendChild(saveBtn);
 	form.appendChild(btns);
-	providerModalBody.appendChild(form);
+	m.body.appendChild(form);
 	inp.focus();
 }
 
 export function showOAuthFlow(provider) {
-	providerModalTitle.textContent = provider.displayName;
-	providerModalBody.textContent = "";
+	var m = els();
+	m.title.textContent = provider.displayName;
+	m.body.textContent = "";
 
 	var wrapper = document.createElement("div");
 	wrapper.className = "provider-key-form";
@@ -179,31 +202,32 @@ export function showOAuthFlow(provider) {
 	});
 	btns.appendChild(connectBtn);
 	wrapper.appendChild(btns);
-	providerModalBody.appendChild(wrapper);
+	m.body.appendChild(wrapper);
 }
 
 function pollOAuthStatus(provider) {
+	var m = els();
 	var attempts = 0;
 	var maxAttempts = 60;
 	var timer = setInterval(() => {
 		attempts++;
 		if (attempts > maxAttempts) {
 			clearInterval(timer);
-			providerModalBody.textContent = "";
+			m.body.textContent = "";
 			var timeout = document.createElement("div");
 			timeout.className = "text-xs text-[var(--error)]";
 			timeout.textContent = "OAuth timed out. Please try again.";
-			providerModalBody.appendChild(timeout);
+			m.body.appendChild(timeout);
 			return;
 		}
 		sendRpc("providers.oauth.status", { provider: provider.name }).then((res) => {
 			if (res?.ok && res.payload && res.payload.authenticated) {
 				clearInterval(timer);
-				providerModalBody.textContent = "";
+				m.body.textContent = "";
 				var status = document.createElement("div");
 				status.className = "provider-status";
 				status.textContent = `${provider.displayName} connected successfully!`;
-				providerModalBody.appendChild(status);
+				m.body.appendChild(status);
 				fetchModels();
 				if (S.refreshProvidersPage) S.refreshProvidersPage();
 				setTimeout(closeProviderModal, 1500);
@@ -211,8 +235,3 @@ function pollOAuthStatus(provider) {
 		});
 	}, 2000);
 }
-
-providerModalClose.addEventListener("click", closeProviderModal);
-providerModal.addEventListener("click", (e) => {
-	if (e.target === providerModal) closeProviderModal();
-});

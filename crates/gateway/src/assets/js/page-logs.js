@@ -169,10 +169,15 @@ function LogsPage() {
 		}).then((res) => {
 			if (!res?.ok) return;
 			var entries = res.payload?.entries || [];
-			entries.forEach((e) => {
-				appendEntry(e);
-			});
-			if (logAreaRef.current) logAreaRef.current.scrollTop = logAreaRef.current.scrollHeight;
+			var i = 0;
+			var batchSize = 100;
+			function renderBatch() {
+				var end = Math.min(i + batchSize, entries.length);
+				while (i < end) appendEntry(entries[i++]);
+				if (i < entries.length) requestAnimationFrame(renderBatch);
+				else if (logAreaRef.current) logAreaRef.current.scrollTop = logAreaRef.current.scrollHeight;
+			}
+			renderBatch();
 		});
 	}
 

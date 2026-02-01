@@ -111,44 +111,23 @@ export function chatAddErrorMsg(message) {
 
 export function renderApprovalCard(requestId, command) {
 	if (!S.chatMsgBox) return;
-	var card = document.createElement("div");
-	card.className = "msg approval-card";
+	var tpl = document.getElementById("tpl-approval-card");
+	var frag = tpl.content.cloneNode(true);
+	var card = frag.firstElementChild;
 	card.id = `approval-${requestId}`;
 
-	var label = document.createElement("div");
-	label.className = "approval-label";
-	label.textContent = "Command requires approval:";
-	card.appendChild(label);
+	card.querySelector(".approval-cmd").textContent = command;
 
-	var cmdEl = document.createElement("code");
-	cmdEl.className = "approval-cmd";
-	cmdEl.textContent = command;
-	card.appendChild(cmdEl);
-
-	var btnGroup = document.createElement("div");
-	btnGroup.className = "approval-btns";
-
-	var allowBtn = document.createElement("button");
-	allowBtn.className = "approval-btn approval-allow";
-	allowBtn.textContent = "Allow";
+	var allowBtn = card.querySelector(".approval-allow");
+	var denyBtn = card.querySelector(".approval-deny");
 	allowBtn.onclick = () => {
 		resolveApproval(requestId, "approved", command, card);
 	};
-
-	var denyBtn = document.createElement("button");
-	denyBtn.className = "approval-btn approval-deny";
-	denyBtn.textContent = "Deny";
 	denyBtn.onclick = () => {
 		resolveApproval(requestId, "denied", null, card);
 	};
 
-	btnGroup.appendChild(allowBtn);
-	btnGroup.appendChild(denyBtn);
-	card.appendChild(btnGroup);
-
-	var countdown = document.createElement("div");
-	countdown.className = "approval-countdown";
-	card.appendChild(countdown);
+	var countdown = card.querySelector(".approval-countdown");
 	var remaining = 120;
 	var timer = setInterval(() => {
 		remaining--;

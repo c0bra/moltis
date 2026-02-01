@@ -1,14 +1,32 @@
 // ── Projects (sidebar filter + modal) ────────────────────────
 
 import { sendRpc } from "./helpers.js";
+import { ensureProjectModal } from "./modals.js";
 import { renderSessionProjectSelect } from "./project-combo.js";
 import * as S from "./state.js";
 
 var projectSelect = S.$("projectSelect");
-var projectModal = S.$("projectModal");
-var projectModalBody = S.$("projectModalBody");
-var projectModalClose = S.$("projectModalClose");
 var manageProjectsBtn = S.$("manageProjectsBtn");
+
+var _projectEls = null;
+
+function projectEls() {
+	if (!_projectEls) {
+		ensureProjectModal();
+		_projectEls = {
+			modal: S.$("projectModal"),
+			body: S.$("projectModalBody"),
+			close: S.$("projectModalClose"),
+		};
+		_projectEls.close.addEventListener("click", () => {
+			_projectEls.modal.classList.add("hidden");
+		});
+		_projectEls.modal.addEventListener("click", (e) => {
+			if (e.target === _projectEls.modal) _projectEls.modal.classList.add("hidden");
+		});
+	}
+	return _projectEls;
+}
 
 export function fetchProjects() {
 	sendRpc("projects.list", {}).then((res) => {
@@ -46,18 +64,11 @@ projectSelect.addEventListener("change", () => {
 // ── Project modal ──────────────────────────────────────────
 manageProjectsBtn.addEventListener("click", () => {
 	renderProjectModal();
-	projectModal.classList.remove("hidden");
-});
-
-projectModalClose.addEventListener("click", () => {
-	projectModal.classList.add("hidden");
-});
-
-projectModal.addEventListener("click", (e) => {
-	if (e.target === projectModal) projectModal.classList.add("hidden");
+	projectEls().modal.classList.remove("hidden");
 });
 
 function renderProjectModal() {
+	var projectModalBody = projectEls().body;
 	while (projectModalBody.firstChild) projectModalBody.removeChild(projectModalBody.firstChild);
 
 	var detectBtn = document.createElement("button");
@@ -248,7 +259,7 @@ function renderProjectModal() {
 				S.setActiveProjectId(p.id);
 				localStorage.setItem("moltis-project", S.activeProjectId);
 				renderProjectSelect();
-				projectModal.classList.add("hidden");
+				projectEls().modal.classList.add("hidden");
 			});
 
 			projectModalBody.appendChild(row);

@@ -2182,6 +2182,7 @@ dependencies = [
  "directories",
  "futures",
  "hostname",
+ "include_dir",
  "moltis-agents",
  "moltis-canvas",
  "moltis-channels",
