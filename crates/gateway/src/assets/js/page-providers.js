@@ -6,6 +6,7 @@ import { render } from "preact";
 import { useEffect } from "preact/hooks";
 import { sendRpc } from "./helpers.js";
 import { fetchModels } from "./models.js";
+import { updateNavCount } from "./nav-counts.js";
 import { openProviderModal } from "./providers.js";
 import { registerPage } from "./router.js";
 import { connected } from "./signals.js";
@@ -23,6 +24,7 @@ function fetchProviders() {
 		providers.value = (res.payload || [])
 			.filter((p) => p.configured)
 			.sort((a, b) => a.displayName.localeCompare(b.displayName));
+		updateNavCount("providers", providers.value.length);
 	});
 }
 

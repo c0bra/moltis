@@ -2,6 +2,7 @@
 
 import { sendRpc } from "./helpers.js";
 import { ensureProjectModal } from "./modals.js";
+import { updateNavCount } from "./nav-counts.js";
 import { renderSessionProjectSelect } from "./project-combo.js";
 import * as S from "./state.js";
 
@@ -31,9 +32,11 @@ function projectEls() {
 export function fetchProjects() {
 	sendRpc("projects.list", {}).then((res) => {
 		if (!res?.ok) return;
-		S.setProjects(res.payload || []);
+		var list = res.payload || [];
+		S.setProjects(list);
 		renderProjectSelect();
 		renderSessionProjectSelect();
+		updateNavCount("projects", list.length);
 	});
 }
 

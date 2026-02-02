@@ -7,6 +7,7 @@ import { html } from "htm/preact";
 import { render } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import { sendRpc } from "./helpers.js";
+import { updateNavCount } from "./nav-counts.js";
 import { registerPage } from "./router.js";
 import * as S from "./state.js";
 
@@ -60,6 +61,8 @@ function fetchAll() {
 			if (data.skills) enabledSkills.value = data.skills;
 			if (data.repos) repos.value = data.repos;
 			loading.value = false;
+			var pluginCount = (data.repos || []).filter((r) => r.format && r.format !== "skill").length;
+			updateNavCount("plugins", pluginCount);
 		})
 		.catch(() => {
 			loading.value = false;

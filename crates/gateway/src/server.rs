@@ -94,6 +94,7 @@ pub fn build_gateway_app(state: Arc<GatewayState>, methods: Arc<MethodRegistry>)
             .route("/api/gon", get(api_gon_handler))
             .route("/api/skills", get(api_skills_handler))
             .route("/api/skills/search", get(api_skills_search_handler))
+            .route("/api/mcp", get(api_mcp_handler))
             .route(
                 "/api/images/cached",
                 get(api_cached_images_handler).delete(api_prune_cached_images_handler),
@@ -191,6 +192,7 @@ pub async fn start_gateway(
     }
 
     // Wire live MCP service.
+    let mcp_configured_count;
     {
         let mcp_registry_path = moltis_config::data_dir().join("mcp-servers.json");
         let mcp_reg = moltis_mcp::McpRegistry::load(&mcp_registry_path).unwrap_or_default();
@@ -208,6 +210,11 @@ pub async fn start_gateway(
                     });
             }
         }
+        mcp_configured_count = merged
+            .servers
+            .values()
+            .filter(|s| s.enabled)
+            .count();
         let mcp_manager = Arc::new(moltis_mcp::McpManager::new(merged));
         // Start enabled servers in the background.
         let mgr = Arc::clone(&mcp_manager);
@@ -708,6 +715,15 @@ pub async fn start_gateway(
                 "s"
             }
         ),
+        format!(
+            "mcp: {} configured{}",
+            mcp_configured_count,
+            if mcp_configured_count > 0 {
+                " (starting in background)"
+            } else {
+                ""
+            }
+        ),
         format!("sandbox: {} backend", sandbox_router.backend_name()),
         format!(
             "config: {}",
@@ -868,6 +884,21 @@ async fn ws_upgrade_handler(
 #[derive(serde::Serialize)]
 struct GonData {
     identity: moltis_config::ResolvedIdentity,
+    counts: NavCounts,
+}
+
+/// Counts shown as badges in the sidebar navigation.
+#[cfg(feature = "web-ui")]
+#[derive(Debug, Default, serde::Serialize)]
+struct NavCounts {
+    projects: usize,
+    providers: usize,
+    channels: usize,
+    plugins: usize,
+    skills: usize,
+    mcp: usize,
+    crons: usize,
+    images: usize,
 }
 
 #[cfg(feature = "web-ui")]
@@ -880,7 +911,112 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
         .ok()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
-    GonData { identity }
+
+    let counts = build_nav_counts(gw).await;
+    GonData { identity, counts }
+}
+
+#[cfg(feature = "web-ui")]
+async fn build_nav_counts(gw: &GatewayState) -> NavCounts {
+    let (projects, models, channels, skills_data, mcp, crons, images) = tokio::join!(
+        gw.services.project.list(),
+        gw.services.model.list(),
+        gw.services.channel.status(),
+        gw.services.skills.status(),
+        gw.services.mcp.list(),
+        gw.services.cron.list(),
+        async {
+            let builder = moltis_tools::image_cache::DockerImageBuilder::new();
+            builder.list_cached().await.ok()
+        },
+    );
+
+    let projects = projects
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.len()))
+        .unwrap_or(0);
+
+    let providers = models
+        .ok()
+        .and_then(|v| {
+            v.as_array().map(|arr| {
+                let mut names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+                for m in arr {
+                    if let Some(p) = m.get("provider").and_then(|p| p.as_str()) {
+                        names.insert(p);
+                    }
+                }
+                names.len()
+            })
+        })
+        .unwrap_or(0);
+
+    let channels = channels
+        .ok()
+        .and_then(|v| {
+            v.get("channels")
+                .and_then(|c| c.as_array())
+                .map(|a| a.len())
+        })
+        .unwrap_or(0);
+
+    let (skills, plugins) = skills_data
+        .ok()
+        .map(|v| {
+            let installed = v
+                .get("installed")
+                .and_then(|i| i.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            // plugins count from the plugins service repos
+            (installed, 0usize)
+        })
+        .unwrap_or((0, 0));
+
+    // Count plugins repos separately.
+    let plugins = gw
+        .services
+        .plugins
+        .repos_list()
+        .await
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.len()))
+        .unwrap_or(plugins);
+
+    let mcp = mcp
+        .ok()
+        .and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter(|s| s.get("state").and_then(|s| s.as_str()) == Some("running"))
+                    .count()
+            })
+        })
+        .unwrap_or(0);
+
+    let crons = crons
+        .ok()
+        .and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter(|j| j.get("enabled").and_then(|e| e.as_bool()).unwrap_or(false))
+                    .count()
+            })
+        })
+        .unwrap_or(0);
+
+    let images = images.map(|imgs| imgs.len()).unwrap_or(0);
+
+    NavCounts {
+        projects,
+        providers,
+        channels,
+        plugins,
+        skills,
+        mcp,
+        crons,
+        images,
+    }
 }
 
 #[cfg(feature = "web-ui")]
@@ -954,6 +1090,7 @@ async fn api_bootstrap_handler(State(state): State<AppState>) -> impl IntoRespon
             "default_image": moltis_tools::sandbox::DEFAULT_SANDBOX_IMAGE,
         })
     };
+    let counts = build_nav_counts(gw).await;
     Json(serde_json::json!({
         "channels": channels.ok(),
         "sessions": sessions.ok(),
@@ -962,7 +1099,22 @@ async fn api_bootstrap_handler(State(state): State<AppState>) -> impl IntoRespon
         "onboarded": onboarded,
         "identity": identity,
         "sandbox": sandbox,
+        "counts": counts,
     }))
+}
+
+/// MCP servers list for the UI (HTTP endpoint for initial page load).
+#[cfg(feature = "web-ui")]
+async fn api_mcp_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let servers = state.gateway.services.mcp.list().await;
+    match servers {
+        Ok(val) => axum::Json(val).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
 }
 
 /// Lightweight skills overview: repo summaries + enabled skills only.

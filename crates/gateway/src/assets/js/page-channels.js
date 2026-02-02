@@ -6,6 +6,7 @@ import { render } from "preact";
 import { useEffect } from "preact/hooks";
 import { onEvent } from "./events.js";
 import { sendRpc } from "./helpers.js";
+import { updateNavCount } from "./nav-counts.js";
 import { registerPage } from "./router.js";
 import { connected, models as modelsSig } from "./signals.js";
 import * as S from "./state.js";
@@ -30,6 +31,7 @@ function loadChannels() {
 			var ch = res.payload?.channels || [];
 			channels.value = ch;
 			S.setCachedChannels(ch);
+			updateNavCount("channels", ch.length);
 		}
 	});
 }

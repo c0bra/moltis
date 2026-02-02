@@ -5,6 +5,7 @@ import { html } from "htm/preact";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";
 import { sendRpc } from "./helpers.js";
+import { updateNavCount } from "./nav-counts.js";
 import { registerPage } from "./router.js";
 import * as S from "./state.js";
 import { ConfirmDialog, Modal, requestConfirm } from "./ui.js";
@@ -23,7 +24,10 @@ function loadStatus() {
 
 function loadJobs() {
 	sendRpc("cron.list", {}).then((res) => {
-		if (res?.ok) cronJobs.value = res.payload || [];
+		if (res?.ok) {
+			cronJobs.value = res.payload || [];
+			updateNavCount("crons", cronJobs.value.filter((j) => j.enabled).length);
+		}
 	});
 }
 

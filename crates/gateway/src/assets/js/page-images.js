@@ -4,6 +4,7 @@ import { signal } from "@preact/signals";
 import { html } from "htm/preact";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";
+import { updateNavCount } from "./nav-counts.js";
 import { registerPage } from "./router.js";
 import { sandboxInfo } from "./signals.js";
 import * as S from "./state.js";
@@ -26,6 +27,7 @@ function fetchImages() {
 		.then((r) => (r.ok ? r.json() : { images: [] }))
 		.then((data) => {
 			images.value = data.images || [];
+			updateNavCount("images", images.value.length);
 		})
 		.catch(() => {
 			images.value = [];

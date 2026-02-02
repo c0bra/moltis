@@ -33,6 +33,9 @@
     background: var(--accent-subtle);
   }
 
+  .nav-count { display: none; }
+  .nav-count.visible { display: inline-block; }
+
   /* ── Burger button ── */
 
   .burger-btn {

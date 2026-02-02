@@ -23,6 +23,8 @@ pub struct ServerStatus {
     pub enabled: bool,
     pub tool_count: usize,
     pub server_info: Option<String>,
+    pub command: String,
+    pub args: Vec<String>,
 }
 
 /// Manages the lifecycle of multiple MCP server connections.
@@ -136,6 +138,8 @@ impl McpManager {
                 enabled: config.enabled,
                 tool_count: tools.get(name).map_or(0, |t| t.len()),
                 server_info: None,
+                command: config.command.clone(),
+                args: config.args.clone(),
             });
         }
         statuses
@@ -222,6 +226,20 @@ impl McpManager {
     /// Get a snapshot of the registry for serialization.
     pub async fn registry_snapshot(&self) -> McpRegistry {
         self.registry.read().await.clone()
+    }
+
+    /// Get read access to the registry.
+    pub async fn registry_read(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, McpRegistry> {
+        self.registry.read().await
+    }
+
+    /// Get write access to the registry.
+    pub async fn registry_write(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, McpRegistry> {
+        self.registry.write().await
     }
 
     /// Shut down all servers.
