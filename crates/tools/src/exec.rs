@@ -22,9 +22,10 @@ pub trait ApprovalBroadcaster: Send + Sync {
 }
 
 /// Provider of environment variables to inject into sandbox execution.
+/// Values are wrapped in `Secret` to prevent accidental logging.
 #[async_trait]
 pub trait EnvVarProvider: Send + Sync {
-    async fn get_env_vars(&self) -> Vec<(String, String)>;
+    async fn get_env_vars(&self) -> Vec<(String, secrecy::Secret<String>)>;
 }
 
 /// Result of a shell command execution.
@@ -292,11 +293,18 @@ impl AgentTool for ExecTool {
             }
         }
 
-        let env = if let Some(ref provider) = self.env_provider {
+        let secret_env = if let Some(ref provider) = self.env_provider {
             provider.get_env_vars().await
         } else {
             Vec::new()
         };
+
+        // Expose secrets only at the injection boundary.
+        use secrecy::ExposeSecret;
+        let env: Vec<(String, String)> = secret_env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.expose_secret().clone()))
+            .collect();
 
         let opts = ExecOpts {
             timeout: Duration::from_secs(timeout_secs),
@@ -569,8 +577,11 @@ mod tests {
 
     #[async_trait]
     impl EnvVarProvider for TestEnvProvider {
-        async fn get_env_vars(&self) -> Vec<(String, String)> {
-            vec![("TEST_INJECTED".into(), "hello_from_env".into())]
+        async fn get_env_vars(&self) -> Vec<(String, secrecy::Secret<String>)> {
+            vec![(
+                "TEST_INJECTED".into(),
+                secrecy::Secret::new("hello_from_env".into()),
+            )]
         }
     }
 

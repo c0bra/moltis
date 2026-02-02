@@ -492,8 +492,13 @@ impl CredentialStore {
 
 #[async_trait::async_trait]
 impl moltis_tools::exec::EnvVarProvider for CredentialStore {
-    async fn get_env_vars(&self) -> Vec<(String, String)> {
-        self.get_all_env_values().await.unwrap_or_default()
+    async fn get_env_vars(&self) -> Vec<(String, secrecy::Secret<String>)> {
+        self.get_all_env_values()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, secrecy::Secret::new(v)))
+            .collect()
     }
 }
 
