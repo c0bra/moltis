@@ -5,3 +5,4 @@ prompts
 .env.*
 .DS_Store
 .playwright-mcp/
+features/
