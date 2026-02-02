@@ -15,10 +15,12 @@ pub mod traits;
 pub mod transport;
 pub mod types;
 
+pub mod sse_transport;
+
 pub use {
     client::{McpClient, McpClientState},
     manager::McpManager,
-    registry::{McpRegistry, McpServerConfig},
+    registry::{McpRegistry, McpServerConfig, TransportType},
     tool_bridge::{McpAgentTool, McpToolBridge},
     traits::{McpClientTrait, McpTransport},
 };

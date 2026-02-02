@@ -11,9 +11,19 @@ use {
     tracing::{debug, info},
 };
 
+/// Transport type for MCP server connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportType {
+    #[default]
+    Stdio,
+    Sse,
+}
+
 /// Configuration for a single MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -21,10 +31,28 @@ pub struct McpServerConfig {
     pub env: HashMap<String, String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub transport: TransportType,
+    /// URL for SSE transport. Required when `transport` is `Sse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            enabled: true,
+            transport: TransportType::default(),
+            url: None,
+        }
+    }
 }
 
 /// Persisted registry of MCP server configurations.
@@ -141,9 +169,7 @@ mod tests {
         let mut reg = McpRegistry::new();
         reg.servers.insert("test".into(), McpServerConfig {
             command: "echo".into(),
-            args: vec![],
-            env: HashMap::new(),
-            enabled: true,
+            ..Default::default()
         });
         assert_eq!(reg.list().len(), 1);
         assert!(reg.get("test").is_some());
@@ -157,9 +183,7 @@ mod tests {
         let mut reg = McpRegistry::new();
         reg.servers.insert("srv".into(), McpServerConfig {
             command: "test".into(),
-            args: vec![],
-            env: HashMap::new(),
-            enabled: true,
+            ..Default::default()
         });
 
         assert_eq!(reg.enabled_servers().len(), 1);
@@ -174,8 +198,7 @@ mod tests {
         reg.servers.insert("fs".into(), McpServerConfig {
             command: "mcp-server-filesystem".into(),
             args: vec!["/tmp".into()],
-            env: HashMap::new(),
-            enabled: true,
+            ..Default::default()
         });
 
         let json = serde_json::to_string(&reg).unwrap();
@@ -201,7 +224,7 @@ mod tests {
             command: "echo".into(),
             args: vec!["hello".into()],
             env: HashMap::from([("FOO".into(), "bar".into())]),
-            enabled: true,
+            ..Default::default()
         });
         reg.save().unwrap();
 

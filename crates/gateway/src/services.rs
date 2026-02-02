@@ -350,6 +350,8 @@ pub trait McpService: Send + Sync {
     async fn tools(&self, params: Value) -> ServiceResult;
     /// Restart an MCP server.
     async fn restart(&self, params: Value) -> ServiceResult;
+    /// Update an MCP server's configuration.
+    async fn update(&self, params: Value) -> ServiceResult;
 }
 
 pub struct NoopMcpService;
@@ -385,6 +387,10 @@ impl McpService for NoopMcpService {
     }
 
     async fn restart(&self, _params: Value) -> ServiceResult {
+        Err("MCP not configured".into())
+    }
+
+    async fn update(&self, _params: Value) -> ServiceResult {
         Err("MCP not configured".into())
     }
 }

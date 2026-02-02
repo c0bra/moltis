@@ -26,6 +26,10 @@ pub struct ServerStatus {
     pub server_info: Option<String>,
     pub command: String,
     pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub transport: crate::registry::TransportType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Manages the lifecycle of multiple MCP server connections.
@@ -67,11 +71,23 @@ impl McpManager {
 
     /// Start a single server connection.
     pub async fn start_server(&self, name: &str, config: &McpServerConfig) -> Result<()> {
+        use crate::registry::TransportType;
+
         // Shut down existing connection if any.
         self.stop_server(name).await;
 
-        let mut client =
-            McpClient::connect(name, &config.command, &config.args, &config.env).await?;
+        let mut client = match config.transport {
+            TransportType::Sse => {
+                let url = config
+                    .url
+                    .as_deref()
+                    .with_context(|| format!("SSE transport for '{name}' requires a url"))?;
+                McpClient::connect_sse(name, url).await?
+            },
+            TransportType::Stdio => {
+                McpClient::connect(name, &config.command, &config.args, &config.env).await?
+            },
+        };
 
         // Fetch tools.
         let tool_defs = client.list_tools().await?.to_vec();
@@ -141,6 +157,9 @@ impl McpManager {
                 server_info: None,
                 command: config.command.clone(),
                 args: config.args.clone(),
+                env: config.env.clone(),
+                transport: config.transport,
+                url: config.url.clone(),
             });
         }
         statuses
@@ -239,6 +258,25 @@ impl McpManager {
         self.registry.write().await
     }
 
+    /// Update a server's configuration and restart it if running.
+    pub async fn update_server(&self, name: &str, config: McpServerConfig) -> Result<()> {
+        let was_running = {
+            let clients = self.clients.read().await;
+            clients.contains_key(name)
+        };
+        {
+            let mut reg = self.registry.write().await;
+            let enabled = reg.get(name).is_none_or(|c| c.enabled);
+            let mut new_config = config;
+            new_config.enabled = enabled;
+            reg.add(name.to_string(), new_config)?;
+        }
+        if was_running {
+            self.restart_server(name).await?;
+        }
+        Ok(())
+    }
+
     /// Shut down all servers.
     pub async fn shutdown_all(&self) {
         let names: Vec<String> = self.clients.read().await.keys().cloned().collect();
@@ -277,9 +315,7 @@ mod tests {
         let mut reg = McpRegistry::new();
         reg.servers.insert("test".into(), McpServerConfig {
             command: "echo".into(),
-            args: vec![],
-            env: HashMap::new(),
-            enabled: true,
+            ..Default::default()
         });
         let mgr = McpManager::new(reg);
 

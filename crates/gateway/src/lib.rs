@@ -23,6 +23,7 @@ pub mod chat;
 pub mod chat_error;
 pub mod cron;
 pub mod logs;
+pub mod mcp_health;
 pub mod mcp_service;
 pub mod message_log_store;
 pub mod methods;

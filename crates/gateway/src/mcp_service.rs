@@ -145,11 +145,23 @@ impl McpService for LiveMcpService {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
+        let transport = match params
+            .get("transport")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stdio")
+        {
+            "sse" => moltis_mcp::TransportType::Sse,
+            _ => moltis_mcp::TransportType::Stdio,
+        };
+        let url = params.get("url").and_then(|v| v.as_str()).map(String::from);
+
         let config = moltis_mcp::McpServerConfig {
             command: command.into(),
             args,
             env,
             enabled,
+            transport,
+            url,
         };
 
         // If a server with this name already exists, append a numeric suffix.
@@ -257,6 +269,53 @@ impl McpService for LiveMcpService {
 
         self.manager
             .restart_server(name)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        self.sync_tools().await;
+
+        Ok(serde_json::json!({ "ok": true }))
+    }
+
+    async fn update(&self, params: Value) -> ServiceResult {
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'name' parameter".to_string())?;
+        let command = params
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'command' parameter".to_string())?;
+        let args: Vec<String> = params
+            .get("args")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let env: std::collections::HashMap<String, String> = params
+            .get("env")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let transport = match params
+            .get("transport")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stdio")
+        {
+            "sse" => moltis_mcp::TransportType::Sse,
+            _ => moltis_mcp::TransportType::Stdio,
+        };
+        let url = params.get("url").and_then(|v| v.as_str()).map(String::from);
+
+        let config = moltis_mcp::McpServerConfig {
+            command: command.into(),
+            args,
+            env,
+            transport,
+            url,
+            ..Default::default()
+        };
+
+        self.manager
+            .update_server(name, config)
             .await
             .map_err(|e| e.to_string())?;
 

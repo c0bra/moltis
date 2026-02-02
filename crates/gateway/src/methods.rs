@@ -124,6 +124,7 @@ const WRITE_METHODS: &[&str] = &[
     "mcp.enable",
     "mcp.disable",
     "mcp.restart",
+    "mcp.update",
 ];
 
 const APPROVAL_METHODS: &[&str] = &["exec.approval.request", "exec.approval.resolve"];
@@ -2175,6 +2176,19 @@ impl MethodRegistry {
                         .services
                         .mcp
                         .restart(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "mcp.update",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .mcp
+                        .update(ctx.params.clone())
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
                 })

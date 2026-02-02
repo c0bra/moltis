@@ -8,6 +8,7 @@ use {
 };
 
 use crate::{
+    sse_transport::SseTransport,
     traits::{McpClientTrait, McpTransport},
     transport::StdioTransport,
     types::{
@@ -57,6 +58,26 @@ impl McpClient {
 
         if let Err(e) = client.initialize().await {
             warn!(server = %server_name, error = %e, "MCP initialize handshake failed");
+            return Err(e);
+        }
+        Ok(client)
+    }
+
+    /// Connect to a remote MCP server over HTTP/SSE.
+    pub async fn connect_sse(server_name: &str, url: &str) -> Result<Self> {
+        info!(server = %server_name, url = %url, "connecting to MCP server via SSE");
+        let transport = SseTransport::new(url)?;
+
+        let mut client = Self {
+            server_name: server_name.into(),
+            transport,
+            state: McpClientState::Connected,
+            server_info: None,
+            tools: Vec::new(),
+        };
+
+        if let Err(e) = client.initialize().await {
+            warn!(server = %server_name, error = %e, "MCP SSE initialize handshake failed");
             return Err(e);
         }
         Ok(client)

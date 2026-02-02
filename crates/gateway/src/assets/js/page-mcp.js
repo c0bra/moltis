@@ -4,6 +4,7 @@ import { signal, useSignal } from "@preact/signals";
 import { html } from "htm/preact";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";
+import { onEvent } from "./events.js";
 import { sendRpc } from "./helpers.js";
 import { updateNavCount } from "./nav-counts.js";
 import { registerPage } from "./router.js";
@@ -249,23 +250,59 @@ function deriveNameFromCommand(cmdLine) {
 	return parts[0] || "";
 }
 
+/** Derive a short name from an SSE URL, e.g. "https://mcp.linear.app/mcp" → "linear". */
+function deriveSseName(url) {
+	if (!url) return "";
+	try {
+		var hostname = new URL(url.trim()).hostname;
+		var parts = hostname.split(".").filter((p) => p !== "mcp" && p !== "www");
+		return parts.length > 0 ? parts[0].toLowerCase() : "";
+	} catch {
+		return "";
+	}
+}
+
 function InstallBox() {
 	var cmdLine = useSignal("");
 	var envVal = useSignal("");
 	var adding = useSignal(false);
 	var showEnv = useSignal(false);
+	var transportType = useSignal("stdio");
+	var sseUrl = useSignal("");
 
-	var canAdd = cmdLine.value.trim().length > 0;
-	var detectedName = deriveNameFromCommand(cmdLine.value);
+	var isSse = transportType.value === "sse";
+	var canAdd = isSse ? sseUrl.value.trim().length > 0 : cmdLine.value.trim().length > 0;
+	var detectedName = isSse ? deriveSseName(sseUrl.value) : deriveNameFromCommand(cmdLine.value);
 
 	function onAdd() {
 		if (!canAdd) return;
+		adding.value = true;
+		if (isSse) {
+			var sseName = detectedName || "remote";
+			sendRpc("mcp.add", {
+				name: sseName,
+				command: "",
+				args: [],
+				env: {},
+				transport: "sse",
+				url: sseUrl.value.trim(),
+			}).then((res) => {
+				if (res?.ok) {
+					showToast(`Added MCP tool "${res.payload?.name || sseName}"`, "success");
+				} else {
+					showToast(`Failed: ${res?.error?.message || res?.error || "unknown error"}`, "error");
+				}
+				refreshServers();
+				adding.value = false;
+				sseUrl.value = "";
+			});
+			return;
+		}
 		var parts = cmdLine.value.trim().split(/\s+/).filter(Boolean);
 		var command = parts[0];
 		var argsList = parts.slice(1);
 		var name = detectedName || command;
 		var env = parseEnvLines(envVal.value);
-		adding.value = true;
 		addServer(name, command, argsList, env).then(() => {
 			adding.value = false;
 			cmdLine.value = "";
@@ -279,7 +316,19 @@ function InstallBox() {
 
 	return html`<div class="max-w-[600px] border-t border-[var(--border)] pt-4">
     <h3 class="text-sm font-medium text-[var(--text-strong)] mb-3">Add custom MCP tool</h3>
-    <div class="project-edit-group mb-2">
+    <div class="flex gap-2 mb-3">
+      <button onClick=${() => {
+				transportType.value = "stdio";
+			}}
+        class="text-xs px-2.5 py-1 rounded-[var(--radius-sm)] border cursor-pointer ${transportType.value === "stdio" ? "bg-[var(--accent)] text-white border-[var(--accent)]" : "bg-transparent text-[var(--muted)] border-[var(--border)]"}">Stdio (local)</button>
+      <button onClick=${() => {
+				transportType.value = "sse";
+			}}
+        class="text-xs px-2.5 py-1 rounded-[var(--radius-sm)] border cursor-pointer ${transportType.value === "sse" ? "bg-[var(--accent)] text-white border-[var(--accent)]" : "bg-transparent text-[var(--muted)] border-[var(--border)]"}">SSE (remote)</button>
+    </div>
+    ${
+			!isSse &&
+			html`<div class="project-edit-group mb-2">
       <div class="text-xs text-[var(--muted)] mb-1">Command</div>
       <input type="text" class="provider-key-input w-full font-mono" placeholder="npx -y mcp-remote https://mcp.example.com/mcp"
         value=${cmdLine.value}
@@ -288,7 +337,21 @@ function InstallBox() {
 				}}
         onKeyDown=${onKey} />
       ${detectedName && html`<div class="text-xs text-[var(--muted)] mt-1">Name: <span class="font-mono text-[var(--text-strong)]">${detectedName}</span> <span class="opacity-60">(editable after adding)</span></div>`}
-    </div>
+    </div>`
+		}
+    ${
+			isSse &&
+			html`<div class="project-edit-group mb-2">
+      <div class="text-xs text-[var(--muted)] mb-1">Server URL</div>
+      <input type="text" class="provider-key-input w-full font-mono" placeholder="https://mcp.example.com/mcp"
+        value=${sseUrl.value}
+        onInput=${(e) => {
+					sseUrl.value = e.target.value;
+				}}
+        onKeyDown=${onKey} />
+      ${detectedName && html`<div class="text-xs text-[var(--muted)] mt-1">Name: <span class="font-mono text-[var(--text-strong)]">${detectedName}</span></div>`}
+    </div>`
+		}
     ${
 			showEnv.value &&
 			html`<div class="project-edit-group mb-2">
@@ -319,6 +382,11 @@ function ServerCard({ server }) {
 	var expanded = useSignal(false);
 	var tools = useSignal(null);
 	var toggling = useSignal(false);
+	var editing = useSignal(false);
+	var editCmd = useSignal("");
+	var editArgs = useSignal("");
+	var editEnv = useSignal("");
+	var saving = useSignal(false);
 
 	async function toggleTools() {
 		expanded.value = !expanded.value;
@@ -339,6 +407,37 @@ function ServerCard({ server }) {
 	async function restart() {
 		await sendRpc("mcp.restart", { name: server.name });
 		showToast(`Restarted "${server.name}"`, "success");
+		await refreshServers();
+	}
+
+	function startEdit(e) {
+		e.stopPropagation();
+		editCmd.value = server.command || "";
+		editArgs.value = (server.args || []).join(" ");
+		editEnv.value = Object.entries(server.env || {})
+			.map(([k, v]) => `${k}=${v}`)
+			.join("\n");
+		editing.value = true;
+	}
+
+	async function saveEdit() {
+		saving.value = true;
+		var argsList = editArgs.value.split(/\s+/).filter(Boolean);
+		var env = parseEnvLines(editEnv.value);
+		var res = await sendRpc("mcp.update", {
+			name: server.name,
+			command: editCmd.value.trim(),
+			args: argsList,
+			env,
+		});
+		if (res?.ok) {
+			showToast(`Updated "${server.name}"`, "success");
+			editing.value = false;
+		} else {
+			var msg = res?.error?.message || res?.error || "unknown error";
+			showToast(`Failed to update: ${msg}`, "error");
+		}
+		saving.value = false;
 		await refreshServers();
 	}
 
@@ -365,6 +464,8 @@ function ServerCard({ server }) {
         <span class="text-xs text-[var(--muted)]">${server.tool_count} tool${server.tool_count !== 1 ? "s" : ""}</span>
       </div>
       <div class="flex items-center gap-1.5">
+        <button onClick=${startEdit}
+          class="bg-transparent border border-[var(--border)] text-[var(--text)] rounded-[var(--radius-sm)] text-xs px-2 py-1 cursor-pointer" title="Edit">Edit</button>
         <button onClick=${(e) => {
 					e.stopPropagation();
 					toggleEnabled();
@@ -379,6 +480,42 @@ function ServerCard({ server }) {
           class="bg-transparent border border-[var(--border)] text-[var(--error)] rounded-[var(--radius-sm)] text-xs px-2 py-1 cursor-pointer">Remove</button>
       </div>
     </div>
+    ${
+			editing.value &&
+			html`<div class="px-3 pb-3 border border-t-0 border-[var(--border)] rounded-b-[var(--radius-sm)]" onClick=${(e) => e.stopPropagation()}>
+        <div class="project-edit-group mb-2 mt-2">
+          <div class="text-xs text-[var(--muted)] mb-1">Command</div>
+          <input type="text" class="provider-key-input w-full font-mono" value=${editCmd.value}
+            onInput=${(e) => {
+							editCmd.value = e.target.value;
+						}} />
+        </div>
+        <div class="project-edit-group mb-2">
+          <div class="text-xs text-[var(--muted)] mb-1">Arguments</div>
+          <input type="text" class="provider-key-input w-full font-mono" value=${editArgs.value}
+            onInput=${(e) => {
+							editArgs.value = e.target.value;
+						}} />
+        </div>
+        <div class="project-edit-group mb-2">
+          <div class="text-xs text-[var(--muted)] mb-1">Environment variables (KEY=VALUE per line)</div>
+          <textarea class="provider-key-input w-full min-h-[40px] resize-y font-mono text-sm" rows="2"
+            value=${editEnv.value}
+            onInput=${(e) => {
+							editEnv.value = e.target.value;
+						}} />
+        </div>
+        <div class="flex gap-2">
+          <button class="provider-btn" onClick=${saveEdit} disabled=${saving.value}>
+            ${saving.value ? "Saving\u2026" : "Save"}
+          </button>
+          <button onClick=${() => {
+						editing.value = false;
+					}}
+            class="bg-transparent border border-[var(--border)] text-[var(--muted)] rounded-[var(--radius-sm)] text-xs px-2 py-1 cursor-pointer">Cancel</button>
+        </div>
+      </div>`
+		}
     ${
 			expanded.value &&
 			html`<div class="skills-repo-detail" style="display:block">
@@ -423,6 +560,14 @@ function ConfiguredServersSection() {
 function McpPage() {
 	useEffect(() => {
 		refreshServers();
+		// Listen for health status broadcasts from the server.
+		var off = onEvent("mcp.status", (payload) => {
+			if (Array.isArray(payload)) {
+				servers.value = payload;
+				updateNavCount("mcp", payload.filter((s) => s.state === "running").length);
+			}
+		});
+		return off;
 	}, []);
 
 	return html`

@@ -201,6 +201,10 @@ pub async fn start_gateway(
         let mut merged = mcp_reg;
         for (name, entry) in &config.mcp.servers {
             if !merged.servers.contains_key(name) {
+                let transport = match entry.transport.as_str() {
+                    "sse" => moltis_mcp::registry::TransportType::Sse,
+                    _ => moltis_mcp::registry::TransportType::Stdio,
+                };
                 merged
                     .servers
                     .insert(name.clone(), moltis_mcp::McpServerConfig {
@@ -208,6 +212,8 @@ pub async fn start_gateway(
                         args: entry.args.clone(),
                         env: entry.env.clone(),
                         enabled: entry.enabled,
+                        transport,
+                        url: entry.url.clone(),
                     });
             }
         }
@@ -611,6 +617,15 @@ pub async fn start_gateway(
             .set_tool_registry(Arc::clone(&shared_tool_registry))
             .await;
         crate::mcp_service::sync_mcp_tools(live_mcp.manager(), &shared_tool_registry).await;
+    }
+
+    // Spawn MCP health polling + auto-restart background task.
+    {
+        let health_state = Arc::clone(&state);
+        let health_mcp = Arc::clone(&live_mcp);
+        tokio::spawn(async move {
+            crate::mcp_health::run_health_monitor(health_state, health_mcp).await;
+        });
     }
 
     let methods = Arc::new(MethodRegistry::new());

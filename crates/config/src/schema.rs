@@ -127,7 +127,8 @@ pub struct McpConfig {
 /// Configuration for a single MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerEntry {
-    /// Command to spawn the server process.
+    /// Command to spawn the server process (stdio transport).
+    #[serde(default)]
     pub command: String,
     /// Arguments to the command.
     #[serde(default)]
@@ -138,6 +139,12 @@ pub struct McpServerEntry {
     /// Whether this server is enabled. Defaults to true.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Transport type: "stdio" (default) or "sse".
+    #[serde(default)]
+    pub transport: String,
+    /// URL for SSE transport. Required when `transport` is "sse".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Channel configuration.
