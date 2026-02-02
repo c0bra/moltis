@@ -179,23 +179,23 @@
 <!-- Tailscale section hidden elements (toggled by page-settings.js) -->
 <div id="ts-installed-bar" style="display:none">
   <div style="max-width:600px;">
-    <div class="flex flex-wrap gap-3 gap-x-6 px-3.5 py-2.5 rounded-md border border-[var(--border)] bg-[var(--surface2)] text-xs">
-      <div class="flex items-center gap-1.5">
+    <div style="display:flex;flex-wrap:wrap;gap:10px 24px;padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);font-size:.75rem">
+      <div style="display:flex;align-items:center;gap:6px">
         <span class="status-dot connected"></span>
-        <span class="text-xs text-[var(--muted)]">Installed</span>
-        <span data-ts-version class="font-mono text-[.72rem] text-[var(--muted)]"></span>
+        <span style="color:var(--muted)">Installed</span>
+        <span data-ts-version style="font-family:var(--font-mono);font-size:.72rem;color:var(--muted)"></span>
       </div>
       <div data-ts-tailnet-wrap style="display:none">
-        <span class="text-xs text-[var(--muted)]">Tailnet:</span>
-        <span data-ts-tailnet class="text-xs text-[var(--text-strong)] font-medium"></span>
+        <span style="color:var(--muted)">Tailnet:</span>
+        <span data-ts-tailnet style="color:var(--text-strong);font-weight:500"></span>
       </div>
       <div data-ts-account-wrap style="display:none">
-        <span class="text-xs text-[var(--muted)]">Account:</span>
-        <span data-ts-account class="text-xs text-[var(--text)]"></span>
+        <span style="color:var(--muted)">Account:</span>
+        <span data-ts-account style="color:var(--text)"></span>
       </div>
       <div data-ts-ip-wrap style="display:none">
-        <span class="text-xs text-[var(--muted)]">IP:</span>
-        <span data-ts-ip class="text-xs text-[var(--text)] font-mono"></span>
+        <span style="color:var(--muted)">IP:</span>
+        <span data-ts-ip style="color:var(--text);font-family:var(--font-mono)"></span>
       </div>
     </div>
   </div>
@@ -203,9 +203,9 @@
 
 <div id="ts-not-installed" style="display:none">
   <div style="max-width:600px;">
-    <div class="p-4 rounded-md border border-[var(--border)] bg-[var(--surface2)] text-center">
-      <p class="text-sm text-[var(--text)] m-0 mb-3">
-        The <code class="font-mono text-sm">tailscale</code> CLI was not found on this machine.
+    <div style="padding:16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);text-align:center">
+      <p style="font-size:.875rem;color:var(--text);margin:0 0 12px">
+        The <code style="font-family:var(--font-mono);font-size:.875rem">tailscale</code> CLI was not found on this machine.
       </p>
       <a href="https://tailscale.com/download" target="_blank" rel="noopener"
         class="provider-btn inline-block no-underline">
