@@ -5,7 +5,13 @@ import { formatBytes, formatTokens, renderMarkdown, sendRpc } from "./helpers.js
 import { bindModelComboEvents, setSessionModel } from "./models.js";
 import { registerPrefix, sessionPath } from "./router.js";
 import { bindSandboxImageEvents, bindSandboxToggleEvents, updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
-import { bumpSessionCount, setSessionReplying, switchSession, updateChatSessionHeader } from "./sessions.js";
+import {
+	bumpSessionCount,
+	fetchSessions,
+	setSessionReplying,
+	switchSession,
+	updateChatSessionHeader,
+} from "./sessions.js";
 import * as S from "./state.js";
 
 // ── Slash commands ───────────────────────────────────────
@@ -407,7 +413,7 @@ function handleSlashCommand(cmdName) {
 				if (S.chatMsgBox) S.chatMsgBox.textContent = "";
 				S.setSessionTokens({ input: 0, output: 0 });
 				updateTokenBar();
-				bumpSessionCount(S.activeSessionKey, 0);
+				fetchSessions();
 			} else {
 				chatAddMsg("error", res?.error?.message || "Clear failed");
 			}

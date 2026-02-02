@@ -291,6 +291,13 @@ function postHistoryLoadActions(key, searchContext, msgEls, sessionList) {
 	}
 }
 
+function nextSessionKey(currentKey) {
+	var idx = S.sessions.findIndex((x) => x.key === currentKey);
+	if (idx >= 0 && idx + 1 < S.sessions.length) return S.sessions[idx + 1].key;
+	if (idx > 0) return S.sessions[idx - 1].key;
+	return "main";
+}
+
 export function updateChatSessionHeader() {
 	var nameEl = S.$("chatSessionName");
 	var inputEl = S.$("chatSessionRenameInput");
@@ -350,19 +357,20 @@ export function updateChatSessionHeader() {
 		deleteBtn.classList.toggle("hidden", isMain);
 		deleteBtn.onclick = () => {
 			var msgCount = s ? s.messageCount || 0 : 0;
+			var nextKey = nextSessionKey(S.activeSessionKey);
 			var doDelete = () => {
 				sendRpc("sessions.delete", { key: S.activeSessionKey }).then((res) => {
 					if (res && !res.ok && res.error && res.error.indexOf("uncommitted changes") !== -1) {
 						confirmDialog("Worktree has uncommitted changes. Force delete?").then((yes) => {
 							if (!yes) return;
 							sendRpc("sessions.delete", { key: S.activeSessionKey, force: true }).then(() => {
-								switchSession("main");
+								switchSession(nextKey);
 								fetchSessions();
 							});
 						});
 						return;
 					}
-					switchSession("main");
+					switchSession(nextKey);
 					fetchSessions();
 				});
 			};
