@@ -329,11 +329,15 @@ impl AgentTool for ExecTool {
         };
 
         // Redact env var values from output so secrets don't leak to the LLM.
+        // Covers the raw value plus common encodings (base64, hex) that could
+        // be used to exfiltrate secrets via `echo $SECRET | base64` etc.
         let mut result = result;
         for (_, v) in &env {
             if !v.is_empty() {
-                result.stdout = result.stdout.replace(v, "[REDACTED]");
-                result.stderr = result.stderr.replace(v, "[REDACTED]");
+                for needle in redaction_needles(v) {
+                    result.stdout = result.stdout.replace(&needle, "[REDACTED]");
+                    result.stderr = result.stderr.replace(&needle, "[REDACTED]");
+                }
             }
         }
 
@@ -346,6 +350,36 @@ impl AgentTool for ExecTool {
         );
         Ok(serde_json::to_value(&result)?)
     }
+}
+
+/// Build a set of strings to redact for a given secret value:
+/// the raw value, its base64 encoding, and its hex encoding.
+fn redaction_needles(value: &str) -> Vec<String> {
+    use base64::Engine;
+
+    let mut needles = vec![value.to_string()];
+
+    // base64 (standard + URL-safe, with and without padding)
+    let b64_std = base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
+    let b64_url = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+    if b64_std != value {
+        needles.push(b64_std);
+    }
+    if b64_url != value {
+        needles.push(b64_url);
+    }
+
+    // Hex encoding (lowercase)
+    let hex = value
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    if hex != value {
+        needles.push(hex);
+    }
+
+    needles
 }
 
 #[cfg(test)]
@@ -550,6 +584,61 @@ mod tests {
             .unwrap();
         // The value is redacted in output.
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "[REDACTED]");
+    }
+
+    #[tokio::test]
+    async fn test_env_var_redaction_base64_exfiltration() {
+        let provider: Arc<dyn EnvVarProvider> = Arc::new(TestEnvProvider);
+        let tool = ExecTool::default().with_env_provider(provider);
+        let result = tool
+            .execute(serde_json::json!({ "command": "echo $TEST_INJECTED | base64" }))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap().trim();
+        assert!(
+            !stdout.contains("aGVsbG9fZnJvbV9lbnY"),
+            "base64 of secret should be redacted, got: {stdout}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_env_var_redaction_hex_exfiltration() {
+        let provider: Arc<dyn EnvVarProvider> = Arc::new(TestEnvProvider);
+        let tool = ExecTool::default().with_env_provider(provider);
+        let result = tool
+            .execute(serde_json::json!({ "command": "printf '%s' \"$TEST_INJECTED\" | xxd -p" }))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap().trim();
+        assert!(
+            !stdout.contains("68656c6c6f5f66726f6d5f656e76"),
+            "hex of secret should be redacted, got: {stdout}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_env_var_redaction_file_exfiltration() {
+        let provider: Arc<dyn EnvVarProvider> = Arc::new(TestEnvProvider);
+        let tool = ExecTool::default().with_env_provider(provider);
+        let result = tool
+            .execute(serde_json::json!({
+                "command": "f=$(mktemp); echo $TEST_INJECTED > $f; cat $f; rm $f"
+            }))
+            .await
+            .unwrap();
+        let stdout = result["stdout"].as_str().unwrap().trim();
+        assert_eq!(stdout, "[REDACTED]", "file read-back should be redacted");
+    }
+
+    #[test]
+    fn test_redaction_needles() {
+        let needles = redaction_needles("secret123");
+        // Raw value
+        assert!(needles.contains(&"secret123".to_string()));
+        // base64
+        assert!(needles.iter().any(|n| n.contains("c2VjcmV0MTIz")));
+        // hex
+        assert!(needles.iter().any(|n| n.contains("736563726574313233")));
     }
 
     #[tokio::test]
