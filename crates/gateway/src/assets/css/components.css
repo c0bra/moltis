@@ -113,14 +113,14 @@
   }
 
   .btn-row { display: flex; gap: 8px; align-items: center; }
-  .btn-row-mt { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .btn-row-mt { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
 
   .provider-btn {
     border-radius: var(--radius-sm);
     cursor: pointer;
     color: #fff;
     background: var(--accent);
-    border: none;
+    border: 1px solid transparent;
     padding: 8px 16px;
     font-size: 0.8rem;
     font-weight: 500;
