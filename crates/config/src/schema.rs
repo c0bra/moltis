@@ -82,6 +82,28 @@ pub struct MoltisConfig {
     pub hooks: Option<HooksConfig>,
     pub memory: MemoryEmbeddingConfig,
     pub tailscale: TailscaleConfig,
+    pub failover: FailoverConfig,
+}
+
+/// Failover configuration for automatic model/provider failover.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FailoverConfig {
+    /// Whether failover is enabled. Defaults to true.
+    pub enabled: bool,
+    /// Ordered list of fallback model IDs to try when the primary fails.
+    /// If empty, the chain is built from all registered models.
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+}
+
+impl Default for FailoverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fallback_models: Vec::new(),
+        }
+    }
 }
 
 /// Tailscale Serve/Funnel configuration.
