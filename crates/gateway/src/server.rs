@@ -1134,7 +1134,8 @@ pub async fn start_gateway(
             Arc::clone(&session_store),
             Arc::clone(&session_metadata),
         )
-        .with_tools(Arc::clone(&shared_tool_registry));
+        .with_tools(Arc::clone(&shared_tool_registry))
+        .with_failover(config.failover.clone());
 
         if let Some(ref hooks) = state.hook_registry {
             chat_service = chat_service.with_hooks_arc(Arc::clone(hooks));

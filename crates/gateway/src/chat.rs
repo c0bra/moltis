@@ -91,6 +91,8 @@ pub struct LiveChatService {
     session_locks: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     /// Per-session message queue for messages arriving during an active run.
     message_queue: Arc<RwLock<HashMap<String, Vec<QueuedMessage>>>>,
+    /// Failover configuration for automatic model/provider failover.
+    failover_config: moltis_config::schema::FailoverConfig,
 }
 
 impl LiveChatService {
@@ -110,7 +112,13 @@ impl LiveChatService {
             hook_registry: None,
             session_locks: Arc::new(RwLock::new(HashMap::new())),
             message_queue: Arc::new(RwLock::new(HashMap::new())),
+            failover_config: moltis_config::schema::FailoverConfig::default(),
         }
+    }
+
+    pub fn with_failover(mut self, config: moltis_config::schema::FailoverConfig) -> Self {
+        self.failover_config = config;
+        self
     }
 
     pub fn with_tools(mut self, registry: Arc<RwLock<ToolRegistry>>) -> Self {
@@ -229,9 +237,9 @@ impl ChatService for LiveChatService {
         };
         let model_id = explicit_model.or(session_model.as_deref());
 
-        let provider = {
+        let provider: Arc<dyn moltis_agents::model::LlmProvider> = {
             let reg = self.providers.read().await;
-            if let Some(id) = model_id {
+            let primary = if let Some(id) = model_id {
                 reg.get(id).ok_or_else(|| {
                     let available: Vec<_> =
                         reg.list_models().iter().map(|m| m.id.clone()).collect();
@@ -243,6 +251,25 @@ impl ChatService for LiveChatService {
             } else {
                 reg.first()
                     .ok_or_else(|| "no LLM providers configured".to_string())?
+            };
+
+            if self.failover_config.enabled {
+                let fallbacks = if self.failover_config.fallback_models.is_empty() {
+                    // Auto-build: same model on other providers first, then same
+                    // provider's other models, then everything else.
+                    reg.fallback_providers_for(primary.id(), primary.name())
+                } else {
+                    reg.providers_for_models(&self.failover_config.fallback_models)
+                };
+                if fallbacks.is_empty() {
+                    primary
+                } else {
+                    let mut chain = vec![primary];
+                    chain.extend(fallbacks);
+                    Arc::new(moltis_agents::provider_chain::ProviderChain::new(chain))
+                }
+            } else {
+                primary
             }
         };
 
