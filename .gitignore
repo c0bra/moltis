@@ -6,3 +6,4 @@ prompts
 .DS_Store
 .playwright-mcp/
 features/
+.moltis/

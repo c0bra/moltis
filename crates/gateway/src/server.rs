@@ -171,9 +171,12 @@ pub async fn start_gateway(
     data_dir: Option<std::path::PathBuf>,
     #[cfg(feature = "tailscale")] tailscale_opts: Option<TailscaleOpts>,
 ) -> anyhow::Result<()> {
-    // Apply config directory override before loading config.
+    // Apply directory overrides before loading config.
     if let Some(dir) = config_dir {
         moltis_config::set_config_dir(dir);
+    }
+    if let Some(ref dir) = data_dir {
+        moltis_config::set_data_dir(dir.clone());
     }
 
     // Resolve auth from environment (MOLTIS_TOKEN / MOLTIS_PASSWORD).
