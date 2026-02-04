@@ -69,6 +69,7 @@ impl Default for ResolvedIdentity {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MoltisConfig {
+    pub server: ServerConfig,
     pub providers: ProvidersConfig,
     pub chat: ChatConfig,
     pub tools: ToolsConfig,
@@ -84,6 +85,26 @@ pub struct MoltisConfig {
     pub tailscale: TailscaleConfig,
     pub failover: FailoverConfig,
     pub heartbeat: HeartbeatConfig,
+}
+
+/// Gateway server configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerConfig {
+    /// Address to bind to. Defaults to "127.0.0.1".
+    pub bind: String,
+    /// Port to listen on. When a new config is created, a random available port
+    /// is generated so each installation gets a unique port.
+    pub port: u16,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1".into(),
+            port: 0, // Will be replaced with a random port when config is created
+        }
+    }
 }
 
 /// Failover configuration for automatic model/provider failover.

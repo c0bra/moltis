@@ -1,4 +1,5 @@
 use std::{
+    net::TcpListener,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -6,6 +7,15 @@ use std::{
 use tracing::{debug, warn};
 
 use crate::{env_subst::substitute_env, schema::MoltisConfig};
+
+/// Generate a random available port by binding to port 0 and reading the assigned port.
+fn generate_random_port() -> u16 {
+    // Bind to port 0 to get an OS-assigned available port
+    TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .unwrap_or(18789) // Fallback to default if binding fails
+}
 
 /// Standard config file names, checked in order.
 const CONFIG_FILENAMES: &[&str] = &["moltis.toml", "moltis.yaml", "moltis.yml", "moltis.json"];
@@ -74,18 +84,36 @@ pub fn load_config_value(path: &Path) -> anyhow::Result<serde_json::Value> {
 /// 2. `~/.config/moltis/moltis.{toml,yaml,yml,json}` (user-global)
 ///
 /// Returns `MoltisConfig::default()` if no config file is found.
+///
+/// If the config has port 0 (either from defaults or missing `[server]` section),
+/// a random available port is generated and saved to the config file.
 pub fn discover_and_load() -> MoltisConfig {
     if let Some(path) = find_config_file() {
         debug!(path = %path.display(), "loading config");
         match load_config(&path) {
-            Ok(cfg) => return cfg, // env overrides already applied by load_config
+            Ok(mut cfg) => {
+                // If port is 0 (default/missing), generate a random port and save it
+                if cfg.server.port == 0 {
+                    cfg.server.port = generate_random_port();
+                    debug!(
+                        port = cfg.server.port,
+                        "generated random port for existing config"
+                    );
+                    if let Err(e) = save_config(&cfg) {
+                        warn!(error = %e, "failed to save config with generated port");
+                    }
+                }
+                return cfg; // env overrides already applied by load_config
+            },
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "failed to load config, using defaults");
             },
         }
     } else {
-        debug!("no config file found, writing default config");
-        let config = MoltisConfig::default();
+        debug!("no config file found, writing default config with random port");
+        let mut config = MoltisConfig::default();
+        // Generate a unique port for this installation
+        config.server.port = generate_random_port();
         if let Err(e) = write_default_config(&config) {
             warn!(error = %e, "failed to write default config file");
         }
@@ -466,6 +494,41 @@ mod tests {
         )];
         let config = apply_env_overrides_with(MoltisConfig::default(), vars.into_iter());
         assert_eq!(config.tools.exec.default_timeout_secs, 60);
+    }
+
+    #[test]
+    fn generate_random_port_returns_valid_port() {
+        // Generate a few random ports and verify they're in the valid range
+        for _ in 0..5 {
+            let port = generate_random_port();
+            // Port should be in the ephemeral range (1024-65535) or fallback (18789)
+            assert!(
+                port >= 1024 || port == 0,
+                "generated port {port} is out of expected range"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_random_port_returns_different_ports() {
+        // Generate multiple ports and verify we get at least some variation
+        let ports: Vec<u16> = (0..10).map(|_| generate_random_port()).collect();
+        let unique: std::collections::HashSet<_> = ports.iter().collect();
+        // With 10 random ports, we should have at least 2 different values
+        // (unless somehow all ports are in use, which is extremely unlikely)
+        assert!(
+            unique.len() >= 2,
+            "expected variation in generated ports, got {:?}",
+            ports
+        );
+    }
+
+    #[test]
+    fn server_config_default_port_is_zero() {
+        // Default port should be 0 (to be replaced with random port on config creation)
+        let config = crate::schema::ServerConfig::default();
+        assert_eq!(config.port, 0);
+        assert_eq!(config.bind, "127.0.0.1");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use {
 #[command(name = "moltis", about = "Moltis — personal AI gateway")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 
     /// Log level (trace, debug, info, warn, error).
     #[arg(long, global = true, default_value = "info")]
@@ -24,31 +24,34 @@ struct Cli {
     /// Output logs as JSON instead of human-readable.
     #[arg(long, global = true, default_value_t = false)]
     json_logs: bool,
+
+    // Gateway arguments (used when no subcommand is provided, or with `gateway` subcommand)
+    /// Address to bind to (overrides config value).
+    #[arg(long, global = true)]
+    bind: Option<String>,
+    /// Port to listen on (overrides config value).
+    #[arg(long, global = true)]
+    port: Option<u16>,
+    /// Custom config directory (overrides default ~/.config/moltis/).
+    #[arg(long, global = true, env = "MOLTIS_CONFIG_DIR")]
+    config_dir: Option<std::path::PathBuf>,
+    /// Custom data directory (overrides default data dir).
+    #[arg(long, global = true, env = "MOLTIS_DATA_DIR")]
+    data_dir: Option<std::path::PathBuf>,
+    /// Tailscale mode: off, serve, or funnel.
+    #[cfg(feature = "tailscale")]
+    #[arg(long, global = true, env = "MOLTIS_TAILSCALE")]
+    tailscale: Option<String>,
+    /// Reset tailscale serve/funnel when the gateway exits.
+    #[cfg(feature = "tailscale")]
+    #[arg(long, global = true, default_value_t = true)]
+    tailscale_reset_on_exit: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the gateway server.
-    Gateway {
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: String,
-        #[arg(long, default_value_t = 18789)]
-        port: u16,
-        /// Custom config directory (overrides default ~/.config/moltis/).
-        #[arg(long, env = "MOLTIS_CONFIG_DIR")]
-        config_dir: Option<std::path::PathBuf>,
-        /// Custom data directory (overrides default data dir).
-        #[arg(long, env = "MOLTIS_DATA_DIR")]
-        data_dir: Option<std::path::PathBuf>,
-        /// Tailscale mode: off, serve, or funnel.
-        #[cfg(feature = "tailscale")]
-        #[arg(long, env = "MOLTIS_TAILSCALE")]
-        tailscale: Option<String>,
-        /// Reset tailscale serve/funnel when the gateway exits.
-        #[cfg(feature = "tailscale")]
-        #[arg(long, default_value_t = true)]
-        tailscale_reset_on_exit: bool,
-    },
+    /// Start the gateway server (default when no subcommand is provided).
+    Gateway,
     /// Invoke an agent directly.
     Agent {
         #[arg(short, long)]
@@ -267,7 +270,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the log buffer only for the gateway command so the web UI can
     // display captured log entries.
-    let log_buffer = if matches!(cli.command, Commands::Gateway { .. }) {
+    let log_buffer = if matches!(cli.command, None | Some(Commands::Gateway)) {
         Some(LogBuffer::default())
     } else {
         None
@@ -278,21 +281,30 @@ async fn main() -> anyhow::Result<()> {
     info!(version = env!("CARGO_PKG_VERSION"), "moltis starting");
 
     match cli.command {
-        Commands::Gateway {
-            bind,
-            port,
-            config_dir,
-            data_dir,
+        // Default: start gateway when no subcommand is provided
+        None | Some(Commands::Gateway) => {
+            // Apply directory overrides before loading config
+            if let Some(ref dir) = cli.config_dir {
+                moltis_config::set_config_dir(dir.clone());
+            }
+            if let Some(ref dir) = cli.data_dir {
+                moltis_config::set_data_dir(dir.clone());
+            }
+
+            // Load config to get server settings
+            let config = moltis_config::discover_and_load();
+
+            // CLI args override config values
+            let bind = cli.bind.unwrap_or(config.server.bind);
+            let port = cli.port.unwrap_or(config.server.port);
+
             #[cfg(feature = "tailscale")]
-            tailscale,
-            #[cfg(feature = "tailscale")]
-            tailscale_reset_on_exit,
-        } => {
-            #[cfg(feature = "tailscale")]
-            let tailscale_opts = tailscale.map(|mode| moltis_gateway::server::TailscaleOpts {
-                mode,
-                reset_on_exit: tailscale_reset_on_exit,
-            });
+            let tailscale_opts = cli
+                .tailscale
+                .map(|mode| moltis_gateway::server::TailscaleOpts {
+                    mode,
+                    reset_on_exit: cli.tailscale_reset_on_exit,
+                });
             #[cfg(not(feature = "tailscale"))]
             let tailscale_opts: Option<()> = None;
             let _ = &tailscale_opts; // suppress unused warning when feature disabled
@@ -300,28 +312,28 @@ async fn main() -> anyhow::Result<()> {
                 &bind,
                 port,
                 log_buffer,
-                config_dir,
-                data_dir,
+                cli.config_dir,
+                cli.data_dir,
                 #[cfg(feature = "tailscale")]
                 tailscale_opts,
             )
             .await
         },
-        Commands::Agent { message, .. } => {
+        Some(Commands::Agent { message, .. }) => {
             let result = moltis_agents::runner::run_agent("default", "main", &message).await?;
             println!("{result}");
             Ok(())
         },
-        Commands::Onboard => moltis_onboarding::wizard::run_onboarding().await,
-        Commands::Auth { action } => auth_commands::handle_auth(action).await,
-        Commands::Sandbox { action } => sandbox_commands::handle_sandbox(action).await,
+        Some(Commands::Onboard) => moltis_onboarding::wizard::run_onboarding().await,
+        Some(Commands::Auth { action }) => auth_commands::handle_auth(action).await,
+        Some(Commands::Sandbox { action }) => sandbox_commands::handle_sandbox(action).await,
         #[cfg(feature = "tailscale")]
-        Commands::Tailscale { action } => tailscale_commands::handle_tailscale(action).await,
-        Commands::Skills { action } => handle_skills(action).await,
-        Commands::Hooks { action } => hooks_commands::handle_hooks(action).await,
+        Some(Commands::Tailscale { action }) => tailscale_commands::handle_tailscale(action).await,
+        Some(Commands::Skills { action }) => handle_skills(action).await,
+        Some(Commands::Hooks { action }) => hooks_commands::handle_hooks(action).await,
         #[cfg(feature = "tls")]
-        Commands::TrustCa => trust_ca().await,
-        _ => {
+        Some(Commands::TrustCa) => trust_ca().await,
+        Some(_) => {
             eprintln!("command not yet implemented");
             Ok(())
         },
