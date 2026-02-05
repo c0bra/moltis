@@ -66,6 +66,8 @@ pub trait SessionService: Send + Sync {
     async fn delete(&self, params: Value) -> ServiceResult;
     async fn compact(&self, params: Value) -> ServiceResult;
     async fn search(&self, params: Value) -> ServiceResult;
+    async fn fork(&self, params: Value) -> ServiceResult;
+    async fn branches(&self, params: Value) -> ServiceResult;
 }
 
 pub struct NoopSessionService;
@@ -101,6 +103,14 @@ impl SessionService for NoopSessionService {
     }
 
     async fn search(&self, _p: Value) -> ServiceResult {
+        Ok(serde_json::json!([]))
+    }
+
+    async fn fork(&self, _p: Value) -> ServiceResult {
+        Err("session forking not available".into())
+    }
+
+    async fn branches(&self, _p: Value) -> ServiceResult {
         Ok(serde_json::json!([]))
     }
 }

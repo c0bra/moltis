@@ -33,6 +33,10 @@ pub struct SessionEntry {
     pub sandbox_image: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_point: Option<u32>,
 }
 
 /// JSON file-backed index mapping session key → SessionEntry.
@@ -102,6 +106,8 @@ impl SessionMetadata {
                 sandbox_enabled: None,
                 sandbox_image: None,
                 channel_binding: None,
+                parent_session_key: None,
+                fork_point: None,
             })
     }
 
@@ -196,6 +202,8 @@ struct SessionRow {
     sandbox_enabled: Option<i32>,
     sandbox_image: Option<String>,
     channel_binding: Option<String>,
+    parent_session_key: Option<String>,
+    fork_point: Option<i32>,
 }
 
 impl From<SessionRow> for SessionEntry {
@@ -214,6 +222,8 @@ impl From<SessionRow> for SessionEntry {
             sandbox_enabled: r.sandbox_enabled.map(|v| v != 0),
             sandbox_image: r.sandbox_image,
             channel_binding: r.channel_binding,
+            parent_session_key: r.parent_session_key,
+            fork_point: r.fork_point.map(|v| v as u32),
         }
     }
 }
@@ -241,9 +251,11 @@ impl SqliteSessionMetadata {
                 project_id      TEXT    REFERENCES projects(id) ON DELETE SET NULL,
                 archived        INTEGER NOT NULL DEFAULT 0,
                 worktree_branch TEXT,
-                sandbox_enabled INTEGER,
-                sandbox_image   TEXT,
-                channel_binding TEXT
+                sandbox_enabled     INTEGER,
+                sandbox_image       TEXT,
+                channel_binding     TEXT,
+                parent_session_key  TEXT,
+                fork_point          INTEGER
             )"#,
         )
         .execute(pool)
@@ -384,6 +396,36 @@ impl SqliteSessionMetadata {
             .execute(&self.pool)
             .await
             .ok();
+    }
+
+    /// Set the parent session key and fork point for a branched session.
+    pub async fn set_parent(&self, key: &str, parent_key: Option<String>, fork_point: Option<u32>) {
+        let now = now_ms() as i64;
+        let fp = fork_point.map(|v| v as i32);
+        sqlx::query(
+            "UPDATE sessions SET parent_session_key = ?, fork_point = ?, updated_at = ? WHERE key = ?",
+        )
+        .bind(&parent_key)
+        .bind(fp)
+        .bind(now)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .ok();
+    }
+
+    /// List all sessions that are children of the given parent key.
+    pub async fn list_children(&self, parent_key: &str) -> Vec<SessionEntry> {
+        sqlx::query_as::<_, SessionRow>(
+            "SELECT * FROM sessions WHERE parent_session_key = ? ORDER BY created_at ASC",
+        )
+        .bind(parent_key)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(Into::into)
+        .collect()
     }
 
     pub async fn remove(&self, key: &str) -> Option<SessionEntry> {

@@ -439,6 +439,9 @@ pub async fn start_gateway(
         Arc::new(moltis_projects::SqliteProjectStore::new(db_pool.clone()));
     let session_store = Arc::new(SessionStore::new(sessions_dir));
     let session_metadata = Arc::new(SqliteSessionMetadata::new(db_pool.clone()));
+    let session_state_store = Arc::new(moltis_sessions::state_store::SessionStateStore::new(
+        db_pool.clone(),
+    ));
 
     // Session service wired below after sandbox_router is created.
 
@@ -789,7 +792,8 @@ pub async fn start_gateway(
         let mut session_svc =
             LiveSessionService::new(Arc::clone(&session_store), Arc::clone(&session_metadata))
                 .with_sandbox_router(Arc::clone(&sandbox_router))
-                .with_project_store(Arc::clone(&project_store));
+                .with_project_store(Arc::clone(&project_store))
+                .with_state_store(Arc::clone(&session_state_store));
         if let Some(ref hooks) = hook_registry {
             session_svc = session_svc.with_hooks(Arc::clone(hooks));
         }
@@ -1227,6 +1231,33 @@ pub async fn start_gateway(
             )));
         }
 
+        // Register session state tool for per-session persistent KV store.
+        tool_registry.register(Box::new(
+            moltis_tools::session_state::SessionStateTool::new(Arc::clone(&session_state_store)),
+        ));
+
+        // Register skill management tools for agent self-extension.
+        {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            tool_registry.register(Box::new(moltis_tools::skill_tools::CreateSkillTool::new(
+                cwd.clone(),
+            )));
+            tool_registry.register(Box::new(moltis_tools::skill_tools::UpdateSkillTool::new(
+                cwd.clone(),
+            )));
+            tool_registry.register(Box::new(moltis_tools::skill_tools::DeleteSkillTool::new(
+                cwd,
+            )));
+        }
+
+        // Register branch session tool for session forking.
+        tool_registry.register(Box::new(
+            moltis_tools::branch_session::BranchSessionTool::new(
+                Arc::clone(&session_store),
+                Arc::clone(&session_metadata),
+            ),
+        ));
+
         // Register spawn_agent tool for sub-agent support.
         // The tool gets a snapshot of the current registry (without itself)
         // so sub-agents have access to all other tools.
@@ -1297,6 +1328,30 @@ pub async fn start_gateway(
             .set_tool_registry(Arc::clone(&shared_tool_registry))
             .await;
         crate::mcp_service::sync_mcp_tools(live_mcp.manager(), &shared_tool_registry).await;
+    }
+
+    // Spawn skill file watcher for hot-reload.
+    #[cfg(feature = "file-watcher")]
+    {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let search_paths = moltis_skills::discover::FsSkillDiscoverer::default_paths(&cwd);
+        let watch_dirs: Vec<std::path::PathBuf> =
+            search_paths.into_iter().map(|(p, _)| p).collect();
+        if let Ok((_watcher, mut rx)) = moltis_skills::watcher::SkillWatcher::start(watch_dirs) {
+            let watcher_state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let _watcher = _watcher; // keep alive
+                while let Some(_event) = rx.recv().await {
+                    broadcast(
+                        &watcher_state,
+                        "skills.changed",
+                        serde_json::json!({}),
+                        BroadcastOpts::default(),
+                    )
+                    .await;
+                }
+            });
+        }
     }
 
     // Spawn MCP health polling + auto-restart background task.
