@@ -79,17 +79,10 @@ jobs:
         run: cargo deb -p moltis-cli --no-build --target "$BUILD_TARGET"
 
       - name: Sign with Sigstore and generate checksums
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          cd target/"$BUILD_TARGET"/debian
-          for deb in *.deb; do
-            # Generate checksums
-            sha256sum "$deb" > "${deb}.sha256"
-            sha512sum "$deb" > "${deb}.sha512"
-            # Sign with Sigstore (keyless)
-            cosign sign-blob --yes --output-signature "${deb}.sig" --output-certificate "${deb}.crt" "$deb"
-          done
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: '*.deb'
+          working-directory: target/${{ matrix.target }}/debian
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -176,17 +169,10 @@ jobs:
         run: cargo generate-rpm -p crates/cli --target "$BUILD_TARGET"
 
       - name: Sign with Sigstore and generate checksums
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          cd target/"$BUILD_TARGET"/generate-rpm
-          for rpm in *.rpm; do
-            # Generate checksums
-            sha256sum "$rpm" > "${rpm}.sha256"
-            sha512sum "$rpm" > "${rpm}.sha512"
-            # Sign with Sigstore (keyless)
-            cosign sign-blob --yes --output-signature "${rpm}.sig" --output-certificate "${rpm}.crt" "$rpm"
-          done
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: '*.rpm'
+          working-directory: target/${{ matrix.target }}/generate-rpm
 
       - name: Upload .rpm artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -285,16 +271,9 @@ jobs:
           fakeroot -- tar --zstd -cf "../moltis-${VERSION}-1-${MATRIX_ARCH}.pkg.tar.zst" .PKGINFO usr/
 
       - name: Sign with Sigstore and generate checksums
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          MATRIX_ARCH: ${{ matrix.arch }}
-        run: |
-          PKG="moltis-${VERSION}-1-${MATRIX_ARCH}.pkg.tar.zst"
-          # Generate checksums
-          sha256sum "$PKG" > "${PKG}.sha256"
-          sha512sum "$PKG" > "${PKG}.sha512"
-          # Sign with Sigstore (keyless)
-          cosign sign-blob --yes --output-signature "${PKG}.sig" --output-certificate "${PKG}.crt" "$PKG"
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: moltis-${{ steps.version.outputs.version }}-1-${{ matrix.arch }}.pkg.tar.zst
 
       - name: Upload .pkg.tar.zst artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -413,16 +392,9 @@ jobs:
           ARCH="$MATRIX_ARCH" ./appimagetool --appimage-extract-and-run "$APP_DIR" "moltis-${VERSION}-${MATRIX_ARCH}.AppImage"
 
       - name: Sign with Sigstore and generate checksums
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          MATRIX_ARCH: ${{ matrix.arch }}
-        run: |
-          APPIMAGE="moltis-${VERSION}-${MATRIX_ARCH}.AppImage"
-          # Generate checksums
-          sha256sum "$APPIMAGE" > "${APPIMAGE}.sha256"
-          sha512sum "$APPIMAGE" > "${APPIMAGE}.sha512"
-          # Sign with Sigstore (keyless)
-          cosign sign-blob --yes --output-signature "${APPIMAGE}.sig" --output-certificate "${APPIMAGE}.crt" "$APPIMAGE"
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: moltis-${{ steps.version.outputs.version }}-${{ matrix.arch }}.AppImage
 
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -466,12 +438,9 @@ jobs:
         id: build-snap
 
       - name: Sign with Sigstore and generate checksums
-        env:
-          SNAP_PATH: ${{ steps.build-snap.outputs.snap }}
-        run: |
-          sha256sum "$SNAP_PATH" > "${SNAP_PATH}.sha256"
-          sha512sum "$SNAP_PATH" > "${SNAP_PATH}.sha512"
-          cosign sign-blob --yes --output-signature "${SNAP_PATH}.sig" --output-certificate "${SNAP_PATH}.crt" "$SNAP_PATH"
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: ${{ steps.build-snap.outputs.snap }}
 
       - name: Upload Snap artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -557,16 +526,9 @@ jobs:
           tar czf "moltis-${VERSION}-${BUILD_TARGET}.tar.gz" moltis
 
       - name: Sign with Sigstore and generate checksums
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          TARBALL="moltis-${VERSION}-${BUILD_TARGET}.tar.gz"
-          # Generate checksums
-          sha256sum "$TARBALL" > "${TARBALL}.sha256" || shasum -a 256 "$TARBALL" > "${TARBALL}.sha256"
-          sha512sum "$TARBALL" > "${TARBALL}.sha512" || shasum -a 512 "$TARBALL" > "${TARBALL}.sha512"
-          # Sign with Sigstore (keyless)
-          cosign sign-blob --yes --output-signature "${TARBALL}.sig" --output-certificate "${TARBALL}.crt" "$TARBALL"
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: moltis-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -707,11 +669,10 @@ jobs:
           cargo sbom --output-format spdx_json_2_3 > moltis-sbom.spdx.json
 
       - name: Sign SBOMs with Sigstore and generate checksums
-        run: |
-          for sbom in moltis-sbom.cdx.json moltis-sbom.spdx.json; do
-            sha256sum "$sbom" > "${sbom}.sha256"
-            cosign sign-blob --yes --output-signature "${sbom}.sig" --output-certificate "${sbom}.crt" "$sbom"
-          done
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: moltis-sbom.cdx.json moltis-sbom.spdx.json
+          skip-sha512: 'true'
 
       - name: Upload SBOM to release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
