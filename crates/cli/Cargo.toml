@@ -13,7 +13,7 @@ pkg-fmt = "tgz"
 pkg-url = "{ repo }/releases/download/v{ version }/moltis-{ version }-{ target }.tar.gz"
 
 [package.metadata.deb]
-assets     = [["target/release/moltis", "usr/bin/", "755"]]
+assets     = [["755", "target/release/moltis", "usr/bin/"]]
 copyright  = "2025, Moltis Contributors"
 depends    = "$auto"
 maintainer = "Moltis Contributors"
