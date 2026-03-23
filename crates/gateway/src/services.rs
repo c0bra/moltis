@@ -176,7 +176,6 @@ pub(crate) fn markdown_to_html(md: &str) -> String {
     html_output
 }
 
-
 // ── Skills (Noop — complex impl that depends on gateway-specific crates) ────
 
 pub struct NoopSkillsService;

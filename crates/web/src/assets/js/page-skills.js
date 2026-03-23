@@ -348,20 +348,28 @@ function SkillEditor(props) {
 			showToast("Description is required.", "error");
 			return;
 		}
-		var allowed_tools = toolsRaw ? toolsRaw.split(",").map((t) => t.trim()).filter(Boolean) : [];
+		var allowed_tools = toolsRaw
+			? toolsRaw
+					.split(",")
+					.map((t) => t.trim())
+					.filter(Boolean)
+			: [];
 		saving.value = true;
-		sendRpc("skills.skill.save", { name: name, description: description, body: body, allowed_tools: allowed_tools }).then(
-			(res) => {
-				saving.value = false;
-				if (res?.ok) {
-					showToast(isForking ? `Forked "${name}" to personal skills` : `Saved "${name}"`, "success");
-					fetchAll();
-					props.onClose();
-				} else {
-					showToast(`Save failed: ${res?.error?.message || res?.error || "unknown"}`, "error");
-				}
-			},
-		);
+		sendRpc("skills.skill.save", {
+			name: name,
+			description: description,
+			body: body,
+			allowed_tools: allowed_tools,
+		}).then((res) => {
+			saving.value = false;
+			if (res?.ok) {
+				showToast(isForking ? `Forked "${name}" to personal skills` : `Saved "${name}"`, "success");
+				fetchAll();
+				props.onClose();
+			} else {
+				showToast(`Save failed: ${res?.error?.message || res?.error || "unknown"}`, "error");
+			}
+		});
 	}
 
 	var title = isForking ? "Fork to Personal Skills" : "Edit Skill";
