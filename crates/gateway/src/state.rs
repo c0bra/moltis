@@ -520,6 +520,12 @@ impl GatewayState {
         })
     }
 
+    /// Whether the connection to the client is secure (TLS active on the
+    /// gateway itself, or TLS terminated by an upstream reverse proxy).
+    pub fn is_secure(&self) -> bool {
+        self.tls_active || self.behind_proxy
+    }
+
     /// Process uptime in milliseconds since this gateway state was created.
     pub fn uptime_ms(&self) -> u64 {
         self.started_at.elapsed().as_millis() as u64

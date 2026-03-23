@@ -247,11 +247,11 @@ async fn setup_handler(
     state.gateway_state.inner.write().await.setup_code = None;
     match state.credential_store.create_session().await {
         Ok(token) => {
-            let behind_proxy = state.gateway_state.behind_proxy;
-            let secure = state.gateway_state.tls_active || behind_proxy;
+            let bp = state.gateway_state.behind_proxy;
+            let secure = state.gateway_state.is_secure();
             #[cfg(feature = "vault")]
             if let Some(rk) = vault_recovery_key {
-                let domain_attr = localhost_cookie_domain(&headers, behind_proxy);
+                let domain_attr = localhost_cookie_domain(&headers, bp);
                 let secure_attr = if secure {
                     "; Secure"
                 } else {
@@ -267,7 +267,7 @@ async fn setup_handler(
                 )
                     .into_response();
             }
-            session_response(token, &headers, behind_proxy, secure)
+            session_response(token, &headers, bp, secure)
         },
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -307,7 +307,7 @@ async fn login_handler(
             match state.credential_store.create_session().await {
                 Ok(token) => {
                     let bp = state.gateway_state.behind_proxy;
-                    session_response(token, &headers, bp, state.gateway_state.tls_active || bp)
+                    session_response(token, &headers, bp, state.gateway_state.is_secure())
                 },
                 Err(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -335,7 +335,7 @@ async fn logout_handler(
         let _ = state.credential_store.delete_session(token).await;
     }
     let bp = state.gateway_state.behind_proxy;
-    clear_session_response(&headers, bp, state.gateway_state.tls_active || bp)
+    clear_session_response(&headers, bp, state.gateway_state.is_secure())
 }
 
 // ── Reset all auth (requires session) ─────────────────────────────────────────
@@ -1258,6 +1258,10 @@ mod tests {
         assert!(
             !cookie.contains("Domain="),
             "cookie should omit Domain in proxy mode when only upstream localhost host is visible, got: {cookie}"
+        );
+        assert!(
+            cookie.contains("; Secure"),
+            "cookie should include Secure in proxy mode (proxy implies TLS), got: {cookie}"
         );
     }
 }
