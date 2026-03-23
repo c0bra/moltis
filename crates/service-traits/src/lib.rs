@@ -621,6 +621,9 @@ pub trait SkillsService: Send + Sync {
     async fn install_dep(&self, params: Value) -> ServiceResult;
     async fn security_status(&self) -> ServiceResult;
     async fn security_scan(&self) -> ServiceResult;
+    /// Save (create or update) a personal skill.  When the source is a repo
+    /// or project, the skill is forked into `~/.moltis/skills/` first.
+    async fn skill_save(&self, params: Value) -> ServiceResult;
 }
 
 /// Minimal stub for `SkillsService` used only by the `Services::default()` impl.
@@ -695,6 +698,10 @@ impl SkillsService for NoopSkillsStub {
     }
 
     async fn security_scan(&self) -> ServiceResult {
+        Err("skills service not configured".into())
+    }
+
+    async fn skill_save(&self, _params: Value) -> ServiceResult {
         Err("skills service not configured".into())
     }
 }
