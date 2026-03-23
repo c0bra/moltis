@@ -1,38 +1,72 @@
 const { expect, test } = require("../base-test");
 const { navigateAndWait, waitForWsConnected, watchPageErrors } = require("../helpers");
 
+function isRetryableRpcError(message) {
+	if (typeof message !== "string") return false;
+	return message.includes("WebSocket not connected") || message.includes("WebSocket disconnected");
+}
+
+async function sendRpcFromPage(page, method, params) {
+	let lastResponse = null;
+	for (let attempt = 0; attempt < 40; attempt++) {
+		if (attempt > 0) {
+			await waitForWsConnected(page);
+			await page.waitForTimeout(100);
+		}
+		lastResponse = await page
+			.evaluate(
+				async ({ methodName, methodParams }) => {
+					var appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
+					if (!appScript) throw new Error("app module script not found");
+					var appUrl = new URL(appScript.src, window.location.origin);
+					var prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
+					var helpers = await import(`${prefix}js/helpers.js`);
+					return helpers.sendRpc(methodName, methodParams);
+				},
+				{
+					methodName: method,
+					methodParams: params,
+				},
+			)
+			.catch((error) => ({ ok: false, error: { message: error?.message || String(error) } }));
+
+		if (lastResponse?.ok) return lastResponse;
+		if (!isRetryableRpcError(lastResponse?.error?.message)) return lastResponse;
+	}
+
+	return lastResponse;
+}
+
+async function expectRpcOk(page, method, params) {
+	const response = await sendRpcFromPage(page, method, params);
+	expect(response?.ok, `RPC ${method} failed: ${response?.error?.message || "unknown error"}`).toBeTruthy();
+	return response;
+}
+
 test.describe("send_document rendering", () => {
 	test("renders document card with filename and download link for document_ref", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await navigateAndWait(page, "/chats/main");
 		await waitForWsConnected(page);
 
-		// Inject a fake tool-result event containing document_ref
-		await page.evaluate(async () => {
-			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
-			if (!appScript) throw new Error("app module script not found");
-			const appUrl = new URL(appScript.src, window.location.origin);
-			const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
-			const events = await import(`${prefix}js/events.js`);
-
-			function dispatchChat(payload) {
-				var listeners = events.eventListeners["chat"] || [];
-				for (var fn of listeners) fn(payload);
-			}
-
-			// Simulate tool_call_start to create the tool card
-			dispatchChat({
-				state: "tool_call_start",
+		// Simulate tool_call_start to create the tool card
+		await expectRpcOk(page, "system-event", {
+			event: "chat",
+			payload: {
 				sessionKey: "main",
+				state: "tool_call_start",
 				toolCallId: "test-doc-call",
 				toolName: "send_document",
 				arguments: JSON.stringify({ path: "/tmp/report.pdf" }),
-			});
+			},
+		});
 
-			// Simulate tool_call_end with document_ref result
-			dispatchChat({
-				state: "tool_call_end",
+		// Simulate tool_call_end with document_ref result
+		await expectRpcOk(page, "system-event", {
+			event: "chat",
+			payload: {
 				sessionKey: "main",
+				state: "tool_call_end",
 				toolCallId: "test-doc-call",
 				toolName: "send_document",
 				success: true,
@@ -42,7 +76,7 @@ test.describe("send_document rendering", () => {
 					filename: "report.pdf",
 					size_bytes: 12345,
 				},
-			});
+			},
 		});
 
 		// Verify the document card renders
@@ -75,29 +109,22 @@ test.describe("send_document rendering", () => {
 		await navigateAndWait(page, "/chats/main");
 		await waitForWsConnected(page);
 
-		await page.evaluate(async () => {
-			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
-			if (!appScript) throw new Error("app module script not found");
-			const appUrl = new URL(appScript.src, window.location.origin);
-			const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
-			const events = await import(`${prefix}js/events.js`);
-
-			function dispatchChat(payload) {
-				var listeners = events.eventListeners["chat"] || [];
-				for (var fn of listeners) fn(payload);
-			}
-
-			dispatchChat({
-				state: "tool_call_start",
+		await expectRpcOk(page, "system-event", {
+			event: "chat",
+			payload: {
 				sessionKey: "main",
+				state: "tool_call_start",
 				toolCallId: "test-zip-call",
 				toolName: "send_document",
 				arguments: JSON.stringify({ path: "/tmp/archive.zip" }),
-			});
+			},
+		});
 
-			dispatchChat({
-				state: "tool_call_end",
+		await expectRpcOk(page, "system-event", {
+			event: "chat",
+			payload: {
 				sessionKey: "main",
+				state: "tool_call_end",
 				toolCallId: "test-zip-call",
 				toolName: "send_document",
 				success: true,
@@ -107,7 +134,7 @@ test.describe("send_document rendering", () => {
 					filename: "archive.zip",
 					size_bytes: 5242880,
 				},
-			});
+			},
 		});
 
 		const docContainer = page.locator(".document-container").first();
@@ -132,29 +159,22 @@ test.describe("send_document rendering", () => {
 		await navigateAndWait(page, "/chats/main");
 		await waitForWsConnected(page);
 
-		await page.evaluate(async () => {
-			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
-			if (!appScript) throw new Error("app module script not found");
-			const appUrl = new URL(appScript.src, window.location.origin);
-			const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
-			const events = await import(`${prefix}js/events.js`);
-
-			function dispatchChat(payload) {
-				var listeners = events.eventListeners["chat"] || [];
-				for (var fn of listeners) fn(payload);
-			}
-
-			dispatchChat({
-				state: "tool_call_start",
+		await expectRpcOk(page, "system-event", {
+			event: "chat",
+			payload: {
 				sessionKey: "main",
+				state: "tool_call_start",
 				toolCallId: "test-csv-call",
 				toolName: "send_document",
 				arguments: JSON.stringify({ path: "/tmp/data.csv" }),
-			});
+			},
+		});
 
-			dispatchChat({
-				state: "tool_call_end",
+		await expectRpcOk(page, "system-event", {
+			event: "chat",
+			payload: {
 				sessionKey: "main",
+				state: "tool_call_end",
 				toolCallId: "test-csv-call",
 				toolName: "send_document",
 				success: true,
@@ -164,7 +184,7 @@ test.describe("send_document rendering", () => {
 					filename: "data.csv",
 					size_bytes: 256,
 				},
-			});
+			},
 		});
 
 		const docContainer = page.locator(".document-container").first();
