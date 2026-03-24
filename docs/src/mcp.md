@@ -313,6 +313,8 @@ args = [
   # NOTE: bind-mount paths resolve against the HOST filesystem, not the
   # Moltis container. Use the same host path you mounted into Moltis.
   "-v", "/data:/data",
+  # Cache npm downloads across container restarts
+  "-v", "moltis-npx-cache:/root/.npm",
   "--entrypoint", "npx",
   "node:22-alpine",
   "-y", "@modelcontextprotocol/server-filesystem", "/data",
@@ -323,6 +325,8 @@ args = [
 command = "docker"
 args = ["run", "--rm", "-i", "mcp/memory"]
 ```
+
+The named volume `moltis-npx-cache` persists the npm cache across container restarts, avoiding re-downloads on every MCP server restart. For air-gapped environments, consider pre-building a custom image with the MCP package installed.
 
 When using containerized MCP servers, remember to mount any directories the server needs access to with `-v`. Because Moltis talks to the Docker daemon via the mounted socket, bind-mount paths (`-v`) always reference the **host** filesystem — not the Moltis container's filesystem.
 

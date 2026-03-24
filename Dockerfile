@@ -67,7 +67,9 @@ RUN apt-get update -qq && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 22 LTS via NodeSource (npm/npx bundled) for stdio-based MCP servers
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+RUN curl -fsSL -o /tmp/nodesource_setup.sh https://deb.nodesource.com/setup_22.x && \
+    bash /tmp/nodesource_setup.sh && \
+    rm -f /tmp/nodesource_setup.sh && \
     apt-get install -yqq --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
