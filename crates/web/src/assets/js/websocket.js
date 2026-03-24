@@ -1317,7 +1317,7 @@ function dispatchFrame(frame) {
 
 var connectOpts = {
 	onFrame: dispatchFrame,
-	onConnected: (hello) => {
+	onConnected: async (hello) => {
 		var isReconnect = hasConnectedOnce;
 		hasConnectedOnce = true;
 		setStatus("connected", "");
@@ -1332,7 +1332,10 @@ var connectOpts = {
 			chatAddMsg("system", "Building sandbox image (installing packages)\u2026");
 		}
 		// Subscribe to all needed events (v4 protocol).
-		subscribeEvents(
+		// Await so that events are not lost to a race between subscribe and
+		// the first broadcast after connect.
+		S.setSubscribed(false);
+		await subscribeEvents(
 			Object.keys(eventHandlers).concat([
 				"tick",
 				"shutdown",
@@ -1354,6 +1357,7 @@ var connectOpts = {
 				"mcp.status",
 			]),
 		);
+		S.setSubscribed(true);
 		// Keep initial hydration authoritative via app bootstrap/gon.
 		// On reconnect, force a fresh snapshot in case realtime events were missed.
 		if (isReconnect) {
