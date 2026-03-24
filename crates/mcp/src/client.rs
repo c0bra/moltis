@@ -1,6 +1,6 @@
 //! MCP client: manages the protocol handshake and tool interactions with a single MCP server.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tracing::{debug, info, warn};
 
@@ -13,6 +13,7 @@ use moltis_metrics::{counter, gauge, histogram, labels, mcp as mcp_metrics};
 use crate::{
     auth::SharedAuthProvider,
     error::{Context, Error, Result},
+    remote::ResolvedRemoteConfig,
     sse_transport::SseTransport,
     traits::{McpClientTrait, McpTransport},
     transport::StdioTransport,
@@ -51,9 +52,11 @@ impl McpClient {
         command: &str,
         args: &[String],
         env: &HashMap<String, String>,
+        request_timeout: Duration,
     ) -> Result<Self> {
         info!(server = %server_name, command = %command, args = ?args, "connecting to MCP server");
-        let transport = StdioTransport::spawn(command, args, env).await?;
+        let transport =
+            StdioTransport::spawn_with_timeout(command, args, env, request_timeout).await?;
 
         let mut client = Self {
             server_name: server_name.into(),
@@ -80,9 +83,17 @@ impl McpClient {
     }
 
     /// Connect to a remote MCP server over HTTP/SSE.
-    pub async fn connect_sse(server_name: &str, url: &str) -> Result<Self> {
-        info!(server = %server_name, url = %url, "connecting to MCP server via SSE");
-        let transport = SseTransport::new(url)?;
+    pub async fn connect_sse(
+        server_name: &str,
+        remote: &ResolvedRemoteConfig,
+        request_timeout: Duration,
+    ) -> Result<Self> {
+        info!(
+            server = %server_name,
+            url = %remote.display_url(),
+            "connecting to MCP server via SSE"
+        );
+        let transport = SseTransport::new_with_remote(remote.clone(), request_timeout)?;
 
         let mut client = Self {
             server_name: server_name.into(),
@@ -102,11 +113,16 @@ impl McpClient {
     /// Connect to a remote MCP server over HTTP/SSE with an OAuth auth provider.
     pub async fn connect_sse_with_auth(
         server_name: &str,
-        url: &str,
+        remote: &ResolvedRemoteConfig,
         auth: SharedAuthProvider,
+        request_timeout: Duration,
     ) -> Result<Self> {
-        info!(server = %server_name, url = %url, "connecting to MCP server via SSE (with auth)");
-        let transport = SseTransport::with_auth(url, auth)?;
+        info!(
+            server = %server_name,
+            url = %remote.display_url(),
+            "connecting to MCP server via SSE (with auth)"
+        );
+        let transport = SseTransport::with_auth_remote(remote.clone(), auth, request_timeout)?;
 
         let mut client = Self {
             server_name: server_name.into(),
@@ -137,7 +153,7 @@ impl McpClient {
             capabilities: ClientCapabilities::default(),
             client_info: ClientInfo {
                 name: "moltis".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
+                version: moltis_config::VERSION.into(),
             },
         };
 

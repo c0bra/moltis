@@ -19,10 +19,12 @@ use {
 };
 
 use crate::{
-    container::BrowserContainer,
+    container::{BrowserContainer, browserless_session_timeout_ms},
     error::Error,
     types::{BrowserConfig, BrowserPreference},
 };
+
+pub(crate) const MAX_BROWSER_INSTANCE_LIFETIME: Duration = Duration::from_secs(30 * 60);
 
 /// Get current system memory usage as a percentage (0-100).
 fn get_memory_usage_percent() -> u8 {
@@ -256,10 +258,9 @@ impl BrowserPool {
     }
 
     /// Clean up idle browser instances and instances that have exceeded the
-    /// hard TTL (30 minutes). The TTL prevents Chromium memory leaks from
-    /// accumulating in long-lived browser instances.
+    /// hard TTL ([`MAX_BROWSER_INSTANCE_LIFETIME`]). The TTL prevents Chromium
+    /// memory leaks from accumulating in long-lived browser instances.
     pub async fn cleanup_idle(&self) {
-        const MAX_LIFETIME: Duration = Duration::from_secs(30 * 60);
         let idle_timeout = Duration::from_secs(self.config.idle_timeout_secs);
         let now = Instant::now();
 
@@ -270,7 +271,8 @@ impl BrowserPool {
             for (sid, instance) in instances.iter() {
                 if let Ok(inst) = instance.try_lock() {
                     let idle = now.duration_since(inst.last_used) > idle_timeout;
-                    let expired = now.duration_since(inst.created_at) > MAX_LIFETIME;
+                    let expired =
+                        now.duration_since(inst.created_at) > MAX_BROWSER_INSTANCE_LIFETIME;
                     if idle || expired {
                         if expired {
                             info!(
@@ -348,6 +350,11 @@ impl BrowserPool {
         let vw = self.config.viewport_width;
         let vh = self.config.viewport_height;
         let low_mem = self.config.low_memory_threshold_mb;
+        let session_timeout_ms = browserless_session_timeout_ms(
+            self.config.idle_timeout_secs,
+            self.config.navigation_timeout_ms,
+            MAX_BROWSER_INSTANCE_LIFETIME.as_secs(),
+        );
         let profile_dir = sandbox_profile_dir(self.config.resolved_profile_dir(), session_id);
         let container_host = self.config.container_host.clone();
 
@@ -370,15 +377,23 @@ impl BrowserPool {
                 "browser container image ready"
             );
 
-            // Create profile directory on host if needed
-            if let Some(ref dir) = profile_dir
-                && let Err(e) = std::fs::create_dir_all(dir)
-            {
-                warn!(
-                    path = %dir.display(),
-                    error = %e,
-                    "failed to create browser profile directory for container"
-                );
+            // Create profile directory on host if needed.
+            // The directory must be world-writable (0o777) because the browserless/chrome
+            // container runs Chrome as uid 999 (`chrome` user), which differs from the
+            // host uid that owns this directory. Without open permissions the bind-mounted
+            // volume is not writable and Chrome crashes on startup.
+            // This is safe: the directory is Moltis-managed (~/.moltis/browser/profile/)
+            // and contains only ephemeral Chrome profile data (cache, cookies, local
+            // storage). It is not a system directory and has no security-sensitive content.
+            if let Some(ref dir) = profile_dir {
+                match std::fs::create_dir_all(dir) {
+                    Err(e) => warn!(
+                        path = %dir.display(),
+                        error = %e,
+                        "failed to create browser profile directory for container"
+                    ),
+                    Ok(()) => set_container_dir_permissions(dir),
+                }
             }
 
             // Start the container (includes readiness polling)
@@ -388,6 +403,7 @@ impl BrowserPool {
                 vw,
                 vh,
                 low_mem,
+                session_timeout_ms,
                 profile_dir.as_deref(),
                 &container_host,
             )
@@ -672,6 +688,27 @@ fn sandbox_profile_dir(profile_root: Option<PathBuf>, session_id: &str) -> Optio
     })
 }
 
+/// Make a directory world-accessible so container processes (which run as a
+/// different uid, e.g. uid 999 in browserless/chrome) can read and write it.
+///
+/// On Unix this sets mode `0o777`. On non-Unix platforms this is a no-op
+/// because container runtimes there (e.g. Apple Container) handle permission
+/// mapping differently.
+#[cfg(unix)]
+fn set_container_dir_permissions(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o777)) {
+        warn!(
+            path = %dir.display(),
+            error = %e,
+            "failed to set browser profile directory permissions"
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn set_container_dir_permissions(_dir: &std::path::Path) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,6 +740,23 @@ mod tests {
     #[test]
     fn sandbox_profile_dir_none_when_profile_disabled() {
         assert!(sandbox_profile_dir(None, "browser-abc123").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_container_dir_permissions_makes_world_writable() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path().join("browser-profile");
+        std::fs::create_dir_all(&dir)?;
+
+        set_container_dir_permissions(&dir);
+
+        let mode = std::fs::metadata(&dir)?.permissions().mode();
+        assert_eq!(mode & 0o777, 0o777, "directory should be world-writable");
+        Ok(())
     }
 
     fn test_config() -> BrowserConfig {

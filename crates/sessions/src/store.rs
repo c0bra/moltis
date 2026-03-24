@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::PathBuf,
 };
 
@@ -91,11 +91,16 @@ impl SessionStore {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let file = OpenOptions::new().create(true).append(true).open(&path)?;
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&path)?;
             let mut lock = RwLock::new(file);
             let mut guard = lock
                 .write()
                 .map_err(|e| Error::lock_failed(e.to_string()))?;
+            (*guard).seek(SeekFrom::End(0))?;
             writeln!(*guard, "{line}")?;
             Ok(())
         })

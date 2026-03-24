@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, Secret};
 
 use {
     axum::{
@@ -320,7 +320,7 @@ fn should_prebuild_sandbox_image(
 
 fn instance_slug(config: &moltis_config::MoltisConfig) -> String {
     let mut raw_name = config.identity.name.clone();
-    if let Some(file_identity) = moltis_config::load_identity()
+    if let Some(file_identity) = moltis_config::load_identity_for_agent("main")
         && file_identity.name.is_some()
     {
         raw_name = file_identity.name;
@@ -703,7 +703,8 @@ pub fn build_gateway_base(
 ) -> (Router<AppState>, AppState) {
     let mut router = Router::new()
         .route("/health", get(health_handler))
-        .route("/ws/chat", get(ws_upgrade_handler));
+        .route("/ws/chat", get(ws_upgrade_handler))
+        .route("/ws", get(ws_upgrade_handler));
 
     // Nest auth routes if credential store is available.
     if let Some(ref cred_store) = state.credential_store {
@@ -759,7 +760,8 @@ pub fn build_gateway_base(
 ) -> (Router<AppState>, AppState) {
     let mut router = Router::new()
         .route("/health", get(health_handler))
-        .route("/ws/chat", get(ws_upgrade_handler));
+        .route("/ws/chat", get(ws_upgrade_handler))
+        .route("/ws", get(ws_upgrade_handler));
 
     // Add Prometheus metrics endpoint (unauthenticated for scraping).
     #[cfg(feature = "prometheus")]
@@ -1153,6 +1155,12 @@ fn spawn_post_listener_warmups(
     browser_service: Arc<dyn crate::services::BrowserService>,
     browser_tool: Option<Arc<dyn moltis_agents::tool_registry::AgentTool>>,
 ) {
+    // Warm the container CLI OnceLock off the async worker threads.
+    tokio::task::spawn_blocking(|| {
+        let cli = moltis_tools::sandbox::container_cli();
+        debug!(cli, "container CLI detected");
+    });
+
     if !env_flag_enabled("MOLTIS_BROWSER_WARMUP") {
         debug!("startup browser warmup disabled (set MOLTIS_BROWSER_WARMUP=1 to enable)");
         return;
@@ -1347,6 +1355,36 @@ fn log_startup_config_storage_diagnostics() {
     }
 }
 
+async fn maybe_deliver_cron_output(
+    outbound: Option<Arc<dyn moltis_channels::ChannelOutbound>>,
+    req: &moltis_cron::service::AgentTurnRequest,
+    delivery_text: &str,
+) {
+    if !req.deliver || delivery_text.trim().is_empty() {
+        return;
+    }
+
+    let (Some(channel_account), Some(chat_id)) = (&req.channel, &req.to) else {
+        return;
+    };
+
+    if let Some(outbound) = outbound {
+        if let Err(error) = outbound
+            .send_text(channel_account, chat_id, delivery_text, None)
+            .await
+        {
+            tracing::warn!(
+                channel = %channel_account,
+                to = %chat_id,
+                error = %error,
+                "cron job channel delivery failed"
+            );
+        }
+    } else {
+        tracing::debug!("cron job delivery requested but no channel outbound configured");
+    }
+}
+
 /// A fully wired gateway (app router + shared state), ready to be served.
 ///
 /// Created by [`prepare_gateway`]. Callers bind their own TCP listener and
@@ -1366,6 +1404,11 @@ pub struct PreparedGateway {
     /// the `trusted-network` feature is enabled and the proxy is active).
     #[cfg(feature = "trusted-network")]
     pub audit_buffer: Option<crate::network_audit::NetworkAuditBuffer>,
+    /// Shutdown sender for the trusted-network proxy.  Retained here so the
+    /// proxy task is not cancelled when `prepare_gateway` returns (dropping
+    /// the sender closes the watch channel and triggers immediate shutdown).
+    #[cfg(feature = "trusted-network")]
+    _proxy_shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 /// Internal metadata for the startup banner printed by [`start_gateway`].
@@ -1385,6 +1428,25 @@ pub(crate) struct BannerMeta {
     pub tailscale_mode: TailscaleMode,
     #[cfg(feature = "tailscale")]
     pub tailscale_reset_on_exit: bool,
+}
+
+fn restore_saved_local_llm_models(
+    registry: &mut ProviderRegistry,
+    providers_config: &moltis_config::schema::ProvidersConfig,
+) {
+    #[cfg(feature = "local-llm")]
+    {
+        if !providers_config.is_enabled("local") {
+            return;
+        }
+
+        crate::local_llm_setup::register_saved_local_models(registry, providers_config);
+    }
+
+    #[cfg(not(feature = "local-llm"))]
+    {
+        let _ = (registry, providers_config);
+    }
 }
 
 /// Prepare the full gateway: load config, run migrations, wire services,
@@ -1504,6 +1566,10 @@ pub async fn prepare_gateway(
             &config_env_overrides,
         ),
     ));
+    {
+        let mut reg = registry.write().await;
+        restore_saved_local_llm_models(&mut reg, &effective_providers);
+    }
     let (provider_summary, providers_available_at_startup) = {
         let reg = registry.read().await;
         log_startup_model_inventory(&reg);
@@ -1681,28 +1747,30 @@ pub async fn prepare_gateway(
                         args: entry.args.clone(),
                         env: entry.env.clone(),
                         enabled: entry.enabled,
+                        request_timeout_secs: entry.request_timeout_secs,
                         transport,
-                        url: entry.url.clone(),
+                        url: entry.url.clone().map(Secret::new),
+                        headers: entry
+                            .headers
+                            .iter()
+                            .map(|(key, value)| (key.clone(), Secret::new(value.clone())))
+                            .collect(),
                         oauth,
+                        display_name: entry.display_name.clone(),
                     });
             }
         }
         mcp_configured_count = merged.servers.values().filter(|s| s.enabled).count();
-        let mcp_manager = Arc::new(moltis_mcp::McpManager::new(merged));
-        live_mcp = Arc::new(crate::mcp_service::LiveMcpService::new(Arc::clone(
-            &mcp_manager,
-        )));
-        // Start enabled servers in the background; sync tools once done.
-        let mgr = Arc::clone(&mcp_manager);
-        let mcp_for_sync = Arc::clone(&live_mcp);
-        tokio::spawn(async move {
-            let started = mgr.start_enabled().await;
-            if !started.is_empty() {
-                tracing::info!(servers = ?started, "MCP servers started");
-            }
-            // Sync newly started tools into the agent tool registry.
-            mcp_for_sync.sync_tools_if_ready().await;
-        });
+        let mcp_manager = Arc::new(moltis_mcp::McpManager::new_with_env_overrides(
+            merged,
+            config_env_overrides.clone(),
+            std::time::Duration::from_secs(config.mcp.request_timeout_secs.max(1)),
+        ));
+        live_mcp = Arc::new(crate::mcp_service::LiveMcpService::new(
+            Arc::clone(&mcp_manager),
+            config_env_overrides.clone(),
+            None,
+        ));
         services.mcp = live_mcp.clone() as Arc<dyn crate::services::McpService>;
     }
     startup_mem_probe.checkpoint("services.core_wired");
@@ -1852,6 +1920,24 @@ pub async fn prepare_gateway(
             config_env_overrides.clone()
         },
     };
+    live_mcp
+        .manager()
+        .set_env_overrides(runtime_env_overrides.clone())
+        .await;
+    live_mcp
+        .set_credential_store(Arc::clone(&credential_store))
+        .await;
+    // Start enabled MCP servers only after runtime env overrides are available,
+    // so URL/header placeholders backed by Settings env vars resolve on boot.
+    let mgr = Arc::clone(live_mcp.manager());
+    let mcp_for_sync = Arc::clone(&live_mcp);
+    tokio::spawn(async move {
+        let started = mgr.start_enabled().await;
+        if !started.is_empty() {
+            tracing::info!(servers = ?started, "MCP servers started");
+        }
+        mcp_for_sync.sync_tools_if_ready().await;
+    });
 
     // Initialize WebAuthn registry for passkey support.
     // Each hostname the user may access from gets its own RP ID + origins entry
@@ -2236,29 +2322,8 @@ pub async fn prepare_gateway(
                 text.clone()
             };
 
-            // Deliver output to a channel if requested.
-            if req.deliver
-                && !delivery_text.trim().is_empty()
-                && let (Some(channel_account), Some(chat_id)) = (&req.channel, &req.to)
-            {
-                if let Some(outbound) = state.services.channel_outbound_arc() {
-                    if let Err(e) = outbound
-                        .send_text(channel_account, chat_id, &delivery_text, None)
-                        .await
-                    {
-                        tracing::warn!(
-                            channel = %channel_account,
-                            to = %chat_id,
-                            error = %e,
-                            "cron job channel delivery failed"
-                        );
-                    }
-                } else {
-                    tracing::debug!(
-                        "cron job delivery requested but no channel outbound configured"
-                    );
-                }
-            }
+            maybe_deliver_cron_output(state.services.channel_outbound_arc(), &req, &delivery_text)
+                .await;
 
             Ok(moltis_cron::service::AgentTurnResult {
                 output: text,
@@ -2335,6 +2400,8 @@ pub async fn prepare_gateway(
     #[cfg(feature = "trusted-network")]
     let proxy_url_for_tools: Option<String>;
     #[cfg(feature = "trusted-network")]
+    let proxy_shutdown_tx: Option<tokio::sync::watch::Sender<bool>>;
+    #[cfg(feature = "trusted-network")]
     {
         let (audit_tx, audit_rx) =
             tokio::sync::mpsc::channel::<moltis_network_filter::NetworkAuditEntry>(1024);
@@ -2359,7 +2426,7 @@ pub async fn prepare_gateway(
                 Arc::clone(&domain_mgr),
                 Some(audit_tx.clone()),
             );
-            let (_proxy_shutdown_tx, proxy_shutdown_rx) = tokio::sync::watch::channel(false);
+            let (shutdown_tx, proxy_shutdown_rx) = tokio::sync::watch::channel(false);
             tokio::spawn(async move {
                 if let Err(e) = proxy.run(proxy_shutdown_rx).await {
                     tracing::warn!("network proxy exited: {e}");
@@ -2375,12 +2442,14 @@ pub async fn prepare_gateway(
             );
             moltis_tools::init_shared_http_client(Some(&url));
             proxy_url_for_tools = Some(url);
+            proxy_shutdown_tx = Some(shutdown_tx);
         } else {
             info!(
                 network_policy = ?sandbox_config.network,
                 "trusted-network proxy not started (policy is not Trusted)"
             );
             proxy_url_for_tools = None;
+            proxy_shutdown_tx = None;
         }
 
         // Create the live network audit service from the receiver channel.
@@ -3269,7 +3338,7 @@ pub async fn prepare_gateway(
             prefix: None,
             global_labels: vec![
                 ("service".to_string(), "moltis-gateway".to_string()),
-                ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+                ("version".to_string(), moltis_config::VERSION.to_string()),
             ],
         };
         match moltis_metrics::init_metrics(metrics_config) {
@@ -3355,7 +3424,7 @@ pub async fn prepare_gateway(
         if !credential_store.is_setup_complete() && !credential_store.is_auth_disabled() {
             let code = std::env::var("MOLTIS_E2E_SETUP_CODE")
                 .unwrap_or_else(|_| crate::auth_routes::generate_setup_code());
-            state.inner.write().await.setup_code = Some(secrecy::Secret::new(code.clone()));
+            state.inner.write().await.setup_code = Some(Secret::new(code.clone()));
             Some(code)
         } else {
             None
@@ -3409,6 +3478,7 @@ pub async fn prepare_gateway(
         let registry_for_startup_discovery = Arc::clone(&registry);
         let state_for_startup_discovery = Arc::clone(&state);
         let provider_config_for_startup_discovery = effective_providers.clone();
+        let provider_config_for_registry_rebuild = provider_config_for_startup_discovery.clone();
         let env_overrides_for_startup_discovery = config_env_overrides.clone();
         tokio::spawn(async move {
             let startup_discovery_started = std::time::Instant::now();
@@ -3428,9 +3498,9 @@ pub async fn prepare_gateway(
             };
 
             let prefetched_models: usize = prefetched.values().map(Vec::len).sum();
-            let new_registry = match tokio::task::spawn_blocking(move || {
+            let mut new_registry = match tokio::task::spawn_blocking(move || {
                 ProviderRegistry::from_config_with_prefetched(
-                    &provider_config_for_startup_discovery,
+                    &provider_config_for_registry_rebuild,
                     &env_overrides_for_startup_discovery,
                     &prefetched,
                 )
@@ -3447,6 +3517,10 @@ pub async fn prepare_gateway(
                 },
             };
 
+            restore_saved_local_llm_models(
+                &mut new_registry,
+                &provider_config_for_startup_discovery,
+            );
             let provider_summary = new_registry.provider_summary();
             let model_count = new_registry.list_models().len();
             {
@@ -3517,10 +3591,13 @@ pub async fn prepare_gateway(
         // Always attach the node exec provider so the LLM can target nodes
         // via the `node` parameter. When tools.exec.host = "node", also set
         // the default node so commands route there without an explicit param.
+        // The `node` parameter only appears in the tool schema when at least
+        // one node is connected (tracked via the shared `node_count` atomic).
         {
-            let provider = Arc::new(crate::node_exec::GatewayNodeExecProvider::new(Arc::clone(
-                &state,
-            )));
+            let provider = Arc::new(crate::node_exec::GatewayNodeExecProvider::new(
+                Arc::clone(&state),
+                Arc::clone(&state.node_count),
+            ));
             let default_node = if config.tools.exec.host == "node" {
                 config.tools.exec.node.clone()
             } else {
@@ -3582,6 +3659,11 @@ pub async fn prepare_gateway(
         tool_registry.register(Box::new(
             moltis_tools::send_image::SendImageTool::new()
                 .with_sandbox_router(Arc::clone(&sandbox_router)),
+        ));
+        tool_registry.register(Box::new(
+            moltis_tools::send_document::SendDocumentTool::new()
+                .with_sandbox_router(Arc::clone(&sandbox_router))
+                .with_session_store(Arc::clone(&session_store)),
         ));
         if let Some(t) = moltis_tools::web_search::WebSearchTool::from_config_with_env_overrides(
             &config.tools.web.search,
@@ -3797,6 +3879,11 @@ pub async fn prepare_gateway(
             tool_registry.register(Box::new(moltis_tools::skill_tools::DeleteSkillTool::new(
                 data_dir.clone(),
             )));
+            if config.skills.enable_agent_sidecar_files {
+                tool_registry.register(Box::new(
+                    moltis_tools::skill_tools::WriteSkillFilesTool::new(data_dir.clone()),
+                ));
+            }
         }
 
         // Register branch session tool for session forking.
@@ -3880,7 +3967,7 @@ pub async fn prepare_gateway(
         }
 
         let shared_tool_registry = Arc::new(tokio::sync::RwLock::new(tool_registry));
-        browser_tool_for_warmup = shared_tool_registry.read().await.get_arc("browser");
+        browser_tool_for_warmup = shared_tool_registry.read().await.get("browser");
         let mut chat_service = LiveChatService::new(
             Arc::clone(&registry),
             Arc::clone(&model_store),
@@ -4948,6 +5035,8 @@ pub async fn prepare_gateway(
         },
         #[cfg(feature = "trusted-network")]
         audit_buffer: audit_buffer_for_broadcast,
+        #[cfg(feature = "trusted-network")]
+        _proxy_shutdown_tx: proxy_shutdown_tx,
     })
 }
 
@@ -5038,7 +5127,7 @@ pub async fn start_gateway(
         match crate::mdns::register(
             &instance,
             port,
-            env!("CARGO_PKG_VERSION"),
+            moltis_config::VERSION,
             Some(&instance_slug(config)),
         ) {
             Ok(daemon) => Some(daemon),
@@ -6282,8 +6371,156 @@ pub(crate) async fn discover_and_build_hooks(
 mod tests {
     use {
         super::*,
-        std::collections::{HashMap, HashSet},
+        async_trait::async_trait,
+        moltis_common::types::ReplyPayload,
+        moltis_providers::raw_model_id,
+        secrecy::Secret,
+        std::{
+            collections::{HashMap, HashSet},
+            sync::OnceLock,
+        },
+        tokio::sync::Mutex,
     };
+
+    fn local_model_config_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
+    struct LocalModelConfigTestGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl LocalModelConfigTestGuard {
+        fn new() -> Self {
+            Self {
+                _lock: local_model_config_test_lock(),
+            }
+        }
+    }
+
+    impl Drop for LocalModelConfigTestGuard {
+        fn drop(&mut self) {
+            moltis_config::clear_config_dir();
+            moltis_config::clear_data_dir();
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct DeliveredMessage {
+        account_id: String,
+        to: String,
+        text: String,
+        reply_to: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct RecordingChannelOutbound {
+        delivered: Mutex<Vec<DeliveredMessage>>,
+    }
+
+    #[async_trait]
+    impl moltis_channels::ChannelOutbound for RecordingChannelOutbound {
+        async fn send_text(
+            &self,
+            account_id: &str,
+            to: &str,
+            text: &str,
+            reply_to: Option<&str>,
+        ) -> moltis_channels::Result<()> {
+            self.delivered.lock().await.push(DeliveredMessage {
+                account_id: account_id.to_string(),
+                to: to.to_string(),
+                text: text.to_string(),
+                reply_to: reply_to.map(ToString::to_string),
+            });
+            Ok(())
+        }
+
+        async fn send_media(
+            &self,
+            _account_id: &str,
+            _to: &str,
+            _payload: &ReplyPayload,
+            _reply_to: Option<&str>,
+        ) -> moltis_channels::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn cron_delivery_request() -> moltis_cron::service::AgentTurnRequest {
+        moltis_cron::service::AgentTurnRequest {
+            message: "Run background summary".to_string(),
+            model: None,
+            timeout_secs: None,
+            deliver: true,
+            channel: Some("bot-main".to_string()),
+            to: Some("123456".to_string()),
+            session_target: moltis_cron::types::SessionTarget::Isolated,
+            sandbox: moltis_cron::types::CronSandboxConfig::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn maybe_deliver_cron_output_sends_to_configured_channel() {
+        let outbound = Arc::new(RecordingChannelOutbound::default());
+        let req = cron_delivery_request();
+
+        maybe_deliver_cron_output(
+            Some(outbound.clone() as Arc<dyn moltis_channels::ChannelOutbound>),
+            &req,
+            "Daily digest ready",
+        )
+        .await;
+
+        let delivered = outbound.delivered.lock().await.clone();
+        assert_eq!(delivered, vec![DeliveredMessage {
+            account_id: "bot-main".to_string(),
+            to: "123456".to_string(),
+            text: "Daily digest ready".to_string(),
+            reply_to: None,
+        }]);
+    }
+
+    #[tokio::test]
+    async fn maybe_deliver_cron_output_skips_blank_messages() {
+        let outbound = Arc::new(RecordingChannelOutbound::default());
+        let req = cron_delivery_request();
+
+        maybe_deliver_cron_output(
+            Some(outbound.clone() as Arc<dyn moltis_channels::ChannelOutbound>),
+            &req,
+            "   ",
+        )
+        .await;
+
+        assert!(outbound.delivered.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn maybe_deliver_cron_output_skips_when_deliver_is_false() {
+        let outbound = Arc::new(RecordingChannelOutbound::default());
+        let mut req = cron_delivery_request();
+        req.deliver = false;
+
+        maybe_deliver_cron_output(
+            Some(outbound.clone() as Arc<dyn moltis_channels::ChannelOutbound>),
+            &req,
+            "should not be sent",
+        )
+        .await;
+
+        assert!(outbound.delivered.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn maybe_deliver_cron_output_skips_when_no_outbound_configured() {
+        let req = cron_delivery_request();
+
+        maybe_deliver_cron_output(None, &req, "Daily digest ready").await;
+    }
 
     #[test]
     fn summarize_model_ids_for_logs_returns_all_when_within_limit() {
@@ -6334,6 +6571,107 @@ mod tests {
         let manager = approval_manager_from_config(&cfg);
         assert_eq!(manager.mode, ApprovalMode::OnMiss);
         assert_eq!(manager.security_level, SecurityLevel::Allowlist);
+    }
+
+    #[cfg(feature = "local-llm")]
+    #[test]
+    fn restore_saved_local_llm_models_rehydrates_custom_models_after_registry_rebuild() {
+        let _guard = LocalModelConfigTestGuard::new();
+        let config_dir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        moltis_config::set_config_dir(config_dir.path().to_path_buf());
+        moltis_config::set_data_dir(data_dir.path().to_path_buf());
+
+        let saved_entry = crate::local_llm_setup::LocalModelEntry {
+            model_id: "custom-qwen".into(),
+            model_path: Some(PathBuf::from("/tmp/custom-qwen.gguf")),
+            hf_repo: Some("Qwen/Qwen3-4B-GGUF".into()),
+            hf_filename: Some("Qwen3-4B-Q4_K_M.gguf".into()),
+            gpu_layers: 0,
+            backend: "GGUF".into(),
+        };
+        crate::local_llm_setup::LocalLlmConfig {
+            models: vec![saved_entry.clone()],
+        }
+        .save()
+        .unwrap();
+
+        let mut rebuilt_registry = ProviderRegistry::empty();
+        let remote_provider = Arc::new(moltis_providers::openai::OpenAiProvider::new(
+            Secret::new("test-key".into()),
+            "remote-model".into(),
+            "https://example.com".into(),
+        ));
+        rebuilt_registry.register(
+            moltis_providers::ModelInfo {
+                id: "remote-model".into(),
+                provider: "openai".into(),
+                display_name: "Remote Model".into(),
+                created_at: None,
+            },
+            remote_provider,
+        );
+
+        restore_saved_local_llm_models(
+            &mut rebuilt_registry,
+            &moltis_config::schema::ProvidersConfig::default(),
+        );
+
+        assert!(
+            rebuilt_registry
+                .list_models()
+                .iter()
+                .any(|model| model.provider == "openai")
+        );
+        assert!(
+            rebuilt_registry
+                .list_models()
+                .iter()
+                .any(|model| raw_model_id(&model.id) == saved_entry.model_id)
+        );
+    }
+
+    #[cfg(feature = "local-llm")]
+    #[test]
+    fn restore_saved_local_llm_models_skips_when_local_provider_is_disabled() {
+        let _guard = LocalModelConfigTestGuard::new();
+        let config_dir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        moltis_config::set_config_dir(config_dir.path().to_path_buf());
+        moltis_config::set_data_dir(data_dir.path().to_path_buf());
+
+        let saved_entry = crate::local_llm_setup::LocalModelEntry {
+            model_id: "custom-qwen".into(),
+            model_path: Some(PathBuf::from("/tmp/custom-qwen.gguf")),
+            hf_repo: Some("Qwen/Qwen3-4B-GGUF".into()),
+            hf_filename: Some("Qwen3-4B-Q4_K_M.gguf".into()),
+            gpu_layers: 0,
+            backend: "GGUF".into(),
+        };
+        crate::local_llm_setup::LocalLlmConfig {
+            models: vec![saved_entry.clone()],
+        }
+        .save()
+        .unwrap();
+
+        let mut providers_config = moltis_config::schema::ProvidersConfig::default();
+        providers_config.providers.insert(
+            "local-llm".into(),
+            moltis_config::schema::ProviderEntry {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let mut rebuilt_registry = ProviderRegistry::empty();
+        restore_saved_local_llm_models(&mut rebuilt_registry, &providers_config);
+
+        assert!(
+            !rebuilt_registry
+                .list_models()
+                .iter()
+                .any(|model| raw_model_id(&model.id) == saved_entry.model_id)
+        );
     }
 
     #[tokio::test]

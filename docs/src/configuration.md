@@ -67,6 +67,7 @@ Commands run inside isolated containers for security:
 mode = "all"                    # "off", "non-main", or "all"
 scope = "session"               # "command", "session", or "global"
 workspace_mount = "ro"          # "ro", "rw", or "none"
+# host_data_dir = "/host/path/data"  # Optional override if auto-detection cannot resolve the host path
 home_persistence = "shared"     # "off", "session", or "shared" (default: "shared")
 # shared_home_dir = "/path/to/shared-home"  # Optional path for shared mode
 backend = "auto"                # "auto", "docker", or "apple-container"
@@ -85,6 +86,11 @@ packages = [
     "golang-go",
 ]
 ```
+
+If Moltis runs inside Docker and also mounts the host container socket
+(`/var/run/docker.sock`), Moltis now auto-detects the host path backing
+`/home/moltis/.moltis` from the parent container's mount table. If that
+inspection cannot resolve the correct path, set `host_data_dir` explicitly.
 
 ```admonish info
 When you modify the packages list and restart, Moltis automatically rebuilds the sandbox image with a new tag.
@@ -114,6 +120,24 @@ If no search API key is configured:
 
 - with `duckduckgo_fallback = false` (default), Moltis returns a clear hint to set `BRAVE_API_KEY` or `PERPLEXITY_API_KEY`
 - with `duckduckgo_fallback = true`, Moltis attempts DuckDuckGo HTML search, which may hit CAPTCHA/rate limits
+
+## Skills
+
+Configure skill discovery and agent-managed personal skills:
+
+```toml
+[skills]
+enabled = true
+auto_load = ["commit"]
+enable_agent_sidecar_files = false  # Opt-in: allow agents to write sidecar text files in personal skills
+```
+
+`enable_agent_sidecar_files` is disabled by default. When enabled, Moltis
+registers the `write_skill_files` tool so agents can write supplementary files
+such as `script.sh`, `Dockerfile`, templates, or `_meta.json` inside
+`<data_dir>/skills/<name>/`. Writes stay confined to that personal skill
+directory, reject path traversal and symlink escapes, and are recorded in
+`~/.moltis/logs/security-audit.jsonl`.
 
 ## Chat Message Queue
 
@@ -182,24 +206,37 @@ Connect to Model Context Protocol servers:
 
 ```toml
 [mcp]
+request_timeout_secs = 30
+                                    # Default timeout for MCP requests (seconds)
 
 [mcp.servers.filesystem]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+request_timeout_secs = 90        # Optional override for this server
 
 [mcp.servers.github]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "ghp_..." }
+
+[mcp.servers.remote_api]
+transport = "sse"
+url = "https://mcp.example.com/mcp?api_key=$REMOTE_MCP_KEY"
+headers = { Authorization = "Bearer ${REMOTE_MCP_TOKEN}" }
 ```
+
+Remote MCP URLs and headers support `$NAME` or `${NAME}` placeholders. For live remote servers, values resolve from Moltis-managed env overrides, either `[env]` in config or **Settings** → **Environment Variables**.
 
 ## Telegram Integration
 
 ```toml
 [channels.telegram.my-bot]
 token = "123456:ABC..."
-allowed_users = [123456789]     # Telegram user IDs allowed to chat
+dm_policy = "allowlist"
+allowlist = ["123456789"]       # Telegram user IDs or usernames (strings)
 ```
+
+See [Telegram](telegram.md) for full configuration reference and setup instructions.
 
 ## Discord Integration
 
@@ -215,6 +252,21 @@ allowlist = ["your_username"]
 ```
 
 See [Discord](discord.md) for full configuration reference and setup instructions.
+
+## Slack Integration
+
+```toml
+[channels]
+offered = ["slack"]
+
+[channels.slack.my-bot]
+bot_token = "xoxb-..."
+app_token = "xapp-..."
+dm_policy = "allowlist"
+allowlist = ["U123456789"]
+```
+
+See [Slack](slack.md) for full configuration reference and setup instructions.
 
 ## TLS / HTTPS
 

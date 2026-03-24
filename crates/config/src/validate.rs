@@ -29,7 +29,7 @@ impl std::fmt::Display for Severity {
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub severity: Severity,
-    /// Category: "syntax", "unknown-field", "unknown-provider", "type-error",
+    /// Category: "syntax", "unknown-field", "deprecated-field", "unknown-provider", "type-error",
     /// "security", "file-ref"
     pub category: &'static str,
     /// Dotted path, e.g. "server.bnd"
@@ -146,6 +146,7 @@ fn build_schema_map() -> KnownKeys {
             ("mode", Leaf),
             ("scope", Leaf),
             ("workspace_mount", Leaf),
+            ("host_data_dir", Leaf),
             ("home_persistence", Leaf),
             ("shared_home_dir", Leaf),
             ("image", Leaf),
@@ -255,6 +256,7 @@ fn build_schema_map() -> KnownKeys {
             ("agent_timeout_secs", Leaf),
             ("agent_max_iterations", Leaf),
             ("max_tool_result_bytes", Leaf),
+            ("registry_mode", Leaf),
         ]))
     };
 
@@ -273,8 +275,10 @@ fn build_schema_map() -> KnownKeys {
             ("args", Leaf),
             ("env", Map(Box::new(Leaf))),
             ("enabled", Leaf),
+            ("request_timeout_secs", Leaf),
             ("transport", Leaf),
             ("url", Leaf),
+            ("headers", Map(Box::new(Leaf))),
             ("oauth", mcp_oauth_override()),
         ]))
     };
@@ -340,6 +344,7 @@ fn build_schema_map() -> KnownKeys {
                 "memory",
                 Struct(HashMap::from([("scope", Leaf), ("max_lines", Leaf)])),
             ),
+            ("reasoning_effort", Leaf),
         ]))
     };
 
@@ -383,14 +388,15 @@ fn build_schema_map() -> KnownKeys {
                 ("enabled", Leaf),
                 ("search_paths", Leaf),
                 ("auto_load", Leaf),
+                ("enable_agent_sidecar_files", Leaf),
             ])),
         ),
         (
             "mcp",
-            Struct(HashMap::from([(
-                "servers",
-                Map(Box::new(mcp_server_entry())),
-            )])),
+            Struct(HashMap::from([
+                ("request_timeout_secs", Leaf),
+                ("servers", Map(Box::new(mcp_server_entry()))),
+            ])),
         ),
         ("channels", MapWithFields {
             // Dynamic keys: extra channel types via #[serde(flatten)]
@@ -450,10 +456,15 @@ fn build_schema_map() -> KnownKeys {
             Struct(HashMap::from([
                 ("backend", Leaf),
                 ("provider", Leaf),
+                ("embedding_provider", Leaf),
                 ("disable_rag", Leaf),
                 ("base_url", Leaf),
+                ("embedding_base_url", Leaf),
                 ("model", Leaf),
+                ("embedding_model", Leaf),
                 ("api_key", Leaf),
+                ("embedding_api_key", Leaf),
+                ("embedding_dimensions", Leaf),
                 ("citations", Leaf),
                 ("llm_reranking", Leaf),
                 ("search_merge_strategy", Leaf),
@@ -768,22 +779,28 @@ pub fn validate_toml_str(toml_str: &str) -> ValidationResult {
     let schema = build_schema_map();
     check_unknown_fields(&toml_value, &schema, "", &mut diagnostics);
 
-    // 3. Provider name hints
+    // 3. Deprecation warnings on raw TOML keys
+    let conflicting_replacements = check_deprecated_fields(&toml_value, &mut diagnostics);
+
+    // 4. Provider name hints
     if let Some(providers) = toml_value.get("providers").and_then(|v| v.as_table()) {
         check_provider_names(providers, &mut diagnostics);
     }
 
-    // 4. Type check — attempt full deserialization
+    // 5. Type check — attempt full deserialization
     if let Err(e) = toml::from_str::<MoltisConfig>(toml_str) {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            category: "type-error",
-            path: String::new(),
-            message: format!("type error: {e}"),
-        });
+        let message = format!("type error: {e}");
+        if !should_suppress_deprecated_conflict_type_error(&message, &conflicting_replacements) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                category: "type-error",
+                path: String::new(),
+                message,
+            });
+        }
     }
 
-    // 5. Semantic warnings on parsed config (only if it parses)
+    // 6. Semantic warnings on parsed config (only if it parses)
     if let Ok(config) = toml::from_str::<MoltisConfig>(toml_str) {
         check_semantic_warnings(&config, &mut diagnostics);
     }
@@ -791,6 +808,92 @@ pub fn validate_toml_str(toml_str: &str) -> ValidationResult {
     ValidationResult {
         diagnostics,
         config_path: None,
+    }
+}
+
+fn check_deprecated_fields(
+    toml_value: &toml::Value,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<&'static str> {
+    let Some(memory) = toml_value.get("memory").and_then(|value| value.as_table()) else {
+        return Vec::new();
+    };
+
+    let mut conflicting_replacements = Vec::new();
+    if check_deprecated_memory_field(memory, "embedding_provider", "provider", diagnostics) {
+        conflicting_replacements.push("provider");
+    }
+    if check_deprecated_memory_field(memory, "embedding_base_url", "base_url", diagnostics) {
+        conflicting_replacements.push("base_url");
+    }
+    if check_deprecated_memory_field(memory, "embedding_model", "model", diagnostics) {
+        conflicting_replacements.push("model");
+    }
+    if check_deprecated_memory_field(memory, "embedding_api_key", "api_key", diagnostics) {
+        conflicting_replacements.push("api_key");
+    }
+    check_deprecated_ignored_memory_field(
+        memory,
+        "embedding_dimensions",
+        "deprecated field; ignored because embedding dimensions are determined by the provider response",
+        diagnostics,
+    );
+    conflicting_replacements
+}
+
+fn should_suppress_deprecated_conflict_type_error(
+    message: &str,
+    conflicting_replacements: &[&str],
+) -> bool {
+    conflicting_replacements
+        .iter()
+        .any(|replacement| message.contains(&format!("duplicate field `{replacement}`")))
+}
+
+fn check_deprecated_memory_field(
+    memory: &toml::map::Map<String, toml::Value>,
+    legacy: &str,
+    replacement: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    if !memory.contains_key(legacy) {
+        return false;
+    }
+
+    if memory.contains_key(replacement) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            category: "deprecated-field",
+            path: format!("memory.{legacy}"),
+            message: format!(
+                "deprecated field conflicts with \"memory.{replacement}\"; remove \"memory.{legacy}\""
+            ),
+        });
+        return true;
+    }
+
+    diagnostics.push(Diagnostic {
+        severity: Severity::Warning,
+        category: "deprecated-field",
+        path: format!("memory.{legacy}"),
+        message: format!("deprecated field; use \"memory.{replacement}\" instead"),
+    });
+    false
+}
+
+fn check_deprecated_ignored_memory_field(
+    memory: &toml::map::Map<String, toml::Value>,
+    legacy: &str,
+    message: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if memory.contains_key(legacy) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "deprecated-field",
+            path: format!("memory.{legacy}"),
+            message: message.into(),
+        });
     }
 }
 
@@ -973,6 +1076,26 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
         });
     }
 
+    if config.mcp.request_timeout_secs == 0 {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            category: "invalid-value",
+            path: "mcp.request_timeout_secs".into(),
+            message: "mcp.request_timeout_secs must be at least 1".into(),
+        });
+    }
+
+    for (name, server) in &config.mcp.servers {
+        if server.request_timeout_secs == Some(0) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                category: "invalid-value",
+                path: format!("mcp.servers.{name}.request_timeout_secs"),
+                message: "mcp server request_timeout_secs must be at least 1".into(),
+            });
+        }
+    }
+
     // agents.default_preset should reference an existing preset key.
     if let Some(default_preset) = config.agents.default_preset.as_deref()
         && !config.agents.presets.contains_key(default_preset)
@@ -986,6 +1109,9 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
             ),
         });
     }
+
+    // agents.presets.*.reasoning_effort is now a typed enum (ReasoningEffort)
+    // and validated at deserialization time (step 4). No semantic check needed.
 
     // SSRF allowlist CIDR validation
     for (idx, entry) in config.tools.web.fetch.ssrf_allowlist.iter().enumerate() {
@@ -1734,6 +1860,123 @@ disable_rag = true
     }
 
     #[test]
+    fn legacy_memory_embedding_fields_warn_but_do_not_error() {
+        let toml = r#"
+[memory]
+embedding_provider = "custom"
+embedding_model = "intfloat/multilingual-e5-small"
+embedding_base_url = "http://moltis-embeddings:7997/v1"
+embedding_dimensions = 384
+"#;
+        let result = validate_toml_str(toml);
+
+        let unknown: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.category == "unknown-field" && d.path.starts_with("memory.embedding_"))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "legacy embedding fields should not be unknown: {:?}",
+            result.diagnostics
+        );
+
+        let deprecated: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.category == "deprecated-field")
+            .collect();
+        assert_eq!(
+            deprecated.len(),
+            4,
+            "expected deprecation warnings for all legacy fields: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|d| d.path == "memory.embedding_provider"
+                    && d.message.contains("memory.provider")),
+            "expected replacement warning for embedding_provider"
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|d| d.path == "memory.embedding_base_url"
+                    && d.message.contains("memory.base_url")),
+            "expected replacement warning for embedding_base_url"
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|d| d.path == "memory.embedding_model" && d.message.contains("memory.model")),
+            "expected replacement warning for embedding_model"
+        );
+        assert!(
+            deprecated
+                .iter()
+                .any(|d| d.path == "memory.embedding_dimensions" && d.message.contains("ignored")),
+            "expected ignored warning for embedding_dimensions"
+        );
+        assert!(
+            !result.has_errors(),
+            "legacy embedding fields should remain usable: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn conflicting_legacy_and_modern_memory_field_reports_targeted_error() {
+        let toml = r#"
+[memory]
+provider = "custom"
+embedding_provider = "custom"
+"#;
+        let result = validate_toml_str(toml);
+
+        let conflict = result
+            .diagnostics
+            .iter()
+            .find(|d| {
+                d.category == "deprecated-field"
+                    && d.severity == Severity::Error
+                    && d.path == "memory.embedding_provider"
+            })
+            .unwrap_or_else(|| {
+                panic!("expected targeted conflict error: {:?}", result.diagnostics)
+            });
+        assert!(
+            conflict
+                .message
+                .contains("remove \"memory.embedding_provider\""),
+            "expected removal guidance, got: {}",
+            conflict.message
+        );
+
+        let type_error = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "type-error");
+        assert!(
+            type_error.is_none(),
+            "expected duplicate-field type error to be suppressed: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn duplicate_field_suppression_matches_only_conflicting_replacements() {
+        assert!(should_suppress_deprecated_conflict_type_error(
+            "type error: duplicate field `provider`",
+            &["provider"]
+        ));
+        assert!(!should_suppress_deprecated_conflict_type_error(
+            "type error: duplicate field `base_url`",
+            &["provider"]
+        ));
+    }
+
+    #[test]
     fn unknown_sandbox_backend_warned() {
         let toml = r#"
 [tools.exec.sandbox]
@@ -2108,6 +2351,45 @@ agent_max_iterations = 0
     }
 
     #[test]
+    fn mcp_request_timeout_must_be_positive() {
+        let toml = r#"
+[mcp]
+request_timeout_secs = 0
+"#;
+        let result = validate_toml_str(toml);
+        let invalid = result.diagnostics.iter().find(|d| {
+            d.path == "mcp.request_timeout_secs"
+                && d.severity == Severity::Error
+                && d.category == "invalid-value"
+        });
+        assert!(
+            invalid.is_some(),
+            "expected mcp.request_timeout_secs invalid-value error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn mcp_server_request_timeout_override_must_be_positive() {
+        let toml = r#"
+[mcp.servers.memory]
+command = "npx"
+request_timeout_secs = 0
+"#;
+        let result = validate_toml_str(toml);
+        let invalid = result.diagnostics.iter().find(|d| {
+            d.path == "mcp.servers.memory.request_timeout_secs"
+                && d.severity == Severity::Error
+                && d.category == "invalid-value"
+        });
+        assert!(
+            invalid.is_some(),
+            "expected mcp server request_timeout_secs invalid-value error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
     fn channels_offered_accepted_without_warning() {
         let toml = r#"
 [channels]
@@ -2296,5 +2578,65 @@ tool_mode = "{mode}"
                 result.diagnostics
             );
         }
+    }
+
+    #[test]
+    fn reasoning_effort_valid_values_no_error() {
+        for effort in &["low", "medium", "high"] {
+            let toml = format!(
+                r#"
+                [agents.presets.thinker]
+                model = "claude-opus-4-5-20251101"
+                reasoning_effort = "{effort}"
+                "#
+            );
+            let result = validate_toml_str(&toml);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|d| d.path.contains("reasoning_effort") && d.severity == Severity::Error)
+                .collect();
+            assert!(
+                errors.is_empty(),
+                "effort={effort} should be valid: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_invalid_value_reports_type_error() {
+        let toml = r#"
+        [agents.presets.thinker]
+        model = "claude-opus-4-5-20251101"
+        reasoning_effort = "extreme"
+        "#;
+        let result = validate_toml_str(toml);
+        let error = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "type-error" && d.severity == Severity::Error);
+        assert!(
+            error.is_some(),
+            "invalid reasoning_effort should produce type error: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_recognized_in_schema() {
+        let toml = r#"
+        [agents.presets.thinker]
+        reasoning_effort = "high"
+        "#;
+        let result = validate_toml_str(toml);
+        let unknown = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "unknown-field" && d.message.contains("reasoning_effort"));
+        assert!(
+            unknown.is_none(),
+            "reasoning_effort should be a recognized field, got: {:?}",
+            result.diagnostics
+        );
     }
 }

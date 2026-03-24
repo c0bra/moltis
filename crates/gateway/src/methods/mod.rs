@@ -105,6 +105,7 @@ const READ_METHODS: &[&str] = &[
     "mcp.list",
     "mcp.status",
     "mcp.tools",
+    "mcp.config.get",
     "tts.generate_phrase",
     "voice.config.get",
     "voice.config.voxtral_requirements",
@@ -198,6 +199,7 @@ const WRITE_METHODS: &[&str] = &[
     "skills.skill.enable",
     "skills.skill.disable",
     "skills.install_dep",
+    "skills.skill.save",
     "mcp.add",
     "mcp.remove",
     "mcp.enable",
@@ -205,6 +207,7 @@ const WRITE_METHODS: &[&str] = &[
     "mcp.restart",
     "mcp.reauth",
     "mcp.update",
+    "mcp.config.update",
     "mcp.oauth.start",
     "mcp.oauth.complete",
     "cron.add",
@@ -691,6 +694,45 @@ mod tests {
         assert_eq!(
             resp.error.as_ref().map(|e| e.code.as_str()),
             Some("UNKNOWN_METHOD")
+        );
+    }
+
+    #[test]
+    fn mcp_config_update_invalid_type_returns_invalid_message() {
+        use crate::{
+            auth::{AuthMode, ResolvedAuth},
+            services::GatewayServices,
+            state::GatewayState,
+        };
+
+        let reg = MethodRegistry::new();
+        let ctx = MethodContext {
+            request_id: "test".into(),
+            method: "mcp.config.update".into(),
+            params: serde_json::json!({
+                "request_timeout_secs": "oops"
+            }),
+            client_conn_id: "conn-1".into(),
+            client_role: "operator".into(),
+            client_scopes: scopes(&["operator.write"]),
+            state: GatewayState::new(
+                ResolvedAuth {
+                    mode: AuthMode::Token,
+                    token: None,
+                    password: None,
+                },
+                GatewayServices::noop(),
+            ),
+            channel: None,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let resp = rt.block_on(reg.dispatch(ctx));
+        assert!(!resp.ok);
+        assert_eq!(
+            resp.error.as_ref().map(|e| e.message.as_str()),
+            Some("invalid 'request_timeout_secs' parameter: expected a positive integer")
         );
     }
 

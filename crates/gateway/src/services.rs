@@ -83,7 +83,9 @@ async fn run_mcp_scan(installed_dir: &Path) -> anyhow::Result<Value> {
     Ok(parsed)
 }
 
-fn is_protected_discovered_skill(name: &str) -> bool {
+/// Returns `true` for discovered skill names that are protected and cannot be
+/// deleted from the UI (e.g. built-in template/tmux skills).
+pub fn is_protected_discovered_skill(name: &str) -> bool {
     matches!(name, "template-skill" | "template" | "tmux")
 }
 
@@ -839,6 +841,67 @@ impl SkillsService for NoopSkillsService {
         }
     }
 
+    async fn skill_save(&self, params: Value) -> ServiceResult {
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'name' parameter".to_string())?;
+        let description = params
+            .get("description")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'description' parameter".to_string())?;
+        let body = params
+            .get("body")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'body' parameter".to_string())?;
+        let allowed_tools: Vec<String> = params
+            .get("allowed_tools")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !moltis_skills::parse::validate_name(name) {
+            return Err(format!(
+                "invalid skill name '{name}': must be 1-64 lowercase alphanumeric/hyphen chars"
+            )
+            .into());
+        }
+
+        let skills_dir = moltis_config::data_dir().join("skills");
+        let skill_dir = skills_dir.join(name);
+
+        // Build SKILL.md content.
+        let mut content = format!("---\nname: {name}\ndescription: {description}\n");
+        if !allowed_tools.is_empty() {
+            content.push_str("allowed_tools:\n");
+            for tool in &allowed_tools {
+                content.push_str(&format!("  - {tool}\n"));
+            }
+        }
+        content.push_str("---\n\n");
+        content.push_str(body);
+        if !body.ends_with('\n') {
+            content.push('\n');
+        }
+
+        std::fs::create_dir_all(&skill_dir)
+            .map_err(|e| format!("failed to create skill directory: {e}"))?;
+        std::fs::write(skill_dir.join("SKILL.md"), &content)
+            .map_err(|e| format!("failed to write SKILL.md: {e}"))?;
+
+        // Determine if this was a create or update for the response.
+        Ok(serde_json::json!({
+            "saved": true,
+            "name": name,
+            "source": "personal",
+            "path": skill_dir.to_string_lossy(),
+        }))
+    }
+
     async fn security_status(&self) -> ServiceResult {
         let installed_dir =
             moltis_skills::install::default_install_dir().map_err(ServiceError::message)?;
@@ -940,9 +1003,9 @@ fn delete_discovered_skill(source_type: &str, params: &Value) -> ServiceResult {
         .ok_or_else(|| "missing 'skill' parameter".to_string())?;
 
     if is_protected_discovered_skill(skill_name) {
-        return Err(
-            format!("skill '{skill_name}' is protected and cannot be deleted from the UI").into(),
-        );
+        return Err(ServiceError::forbidden(format!(
+            "skill '{skill_name}' is protected and cannot be deleted from the UI"
+        )));
     }
 
     if !moltis_skills::parse::validate_name(skill_name) {

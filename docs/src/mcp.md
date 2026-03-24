@@ -23,14 +23,19 @@ MCP is an open protocol that lets AI assistants connect to external tools and da
 
 1. Go to **Settings** → **MCP Servers**
 2. Click **Add Server**
-3. Enter the server configuration
+3. For remote Streamable HTTP servers, enter the server URL and any optional request headers
 4. Click **Save**
+
+After saving a remote server, Moltis only shows a sanitized URL plus header names/count in the UI and status views. Stored header values stay hidden.
 
 ### Via Configuration
 
 Add servers to `moltis.toml`:
 
 ```toml
+[mcp]
+request_timeout_secs = 30
+
 [mcp.servers.filesystem]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/projects"]
@@ -39,11 +44,15 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/projects"]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "ghp_..." }
+request_timeout_secs = 90
 
 [mcp.servers.remote_api]
-url = "https://mcp.example.com/mcp"
 transport = "sse"
+url = "https://mcp.example.com/mcp?api_key=$REMOTE_MCP_KEY"
+headers = { Authorization = "Bearer ${REMOTE_MCP_TOKEN}" }
 ```
+
+Remote URLs and headers support `$NAME` and `${NAME}` placeholders. For live remote servers, placeholder values resolve from Moltis-managed env overrides, either `[env]` in config or **Settings** → **Environment Variables**.
 
 ## Popular MCP Servers
 
@@ -65,6 +74,9 @@ Explore more at [mcp.so](https://mcp.so) and [GitHub MCP Servers](https://github
 ## Configuration Options
 
 ```toml
+[mcp]
+request_timeout_secs = 30       # Global default timeout for MCP requests
+
 [mcp.servers.my_server]
 command = "node"                # Required for stdio transport
 args = ["server.js"]            # Optional arguments
@@ -72,10 +84,54 @@ args = ["server.js"]            # Optional arguments
 # Optional environment variables
 env = { API_KEY = "secret", DEBUG = "true" }
 
+# Optional: per-server timeout override
+request_timeout_secs = 90
+
 # Optional: remote transport
 transport = "sse"               # "stdio" (default) or "sse"
 url = "https://mcp.example.com/mcp"  # Required when transport = "sse"
+headers = { "x-api-key" = "$REMOTE_MCP_KEY" }  # Optional request headers
 ```
+
+## Request Timeouts
+
+Moltis applies MCP request timeouts in two layers:
+
+- `mcp.request_timeout_secs` sets the global default for every MCP server
+- `mcp.servers.<name>.request_timeout_secs` optionally overrides that default for a specific server
+
+This is useful when most local MCP servers respond quickly, but one remote SSE server or one expensive tool server needs a longer timeout.
+
+```toml
+[mcp]
+request_timeout_secs = 30
+
+[mcp.servers.remote_api]
+transport = "sse"
+url = "https://mcp.example.com/mcp"
+request_timeout_secs = 120
+```
+
+In the web UI, the MCP settings page lets you edit both the global default timeout and the optional timeout override for each configured server.
+
+## Remote SSE Secrets and Placeholders
+
+Remote MCP servers often expect API keys or bearer tokens in the URL query string or request headers. Moltis supports both patterns.
+
+```toml
+[mcp.servers.linear_remote]
+transport = "sse"
+url = "https://mcp.example.com/mcp?api_key=$REMOTE_MCP_KEY"
+headers = {
+  Authorization = "Bearer ${REMOTE_MCP_TOKEN}",
+  "x-workspace" = "team-a",
+}
+```
+
+- Use `$NAME` or `${NAME}` placeholders in remote `url` and `headers`
+- Placeholder values resolve from Moltis-managed env overrides, either `[env]` in config or **Settings** → **Environment Variables**
+- UI and API status payloads only expose sanitized URLs plus header names/count, not raw header values
+- Query-string secrets are redacted when Moltis displays a remote URL after save
 
 ## Server Lifecycle
 
@@ -175,6 +231,7 @@ In the web UI, go to **Settings** → **MCP Servers** to see:
 
 - Connection status (connected/disconnected/error)
 - Available tools
+- Sanitized remote URL and configured header names
 - Recent errors
 
 ### View Logs
@@ -238,6 +295,7 @@ MCP servers run with the same permissions as Moltis. Only use servers from trust
 - **Review server code** before running
 - **Limit file access** — use specific paths, not `/`
 - **Use environment variables** for secrets
+- **Prefer placeholders** in remote URLs and headers (`$NAME` / `${NAME}`) instead of hardcoding secrets repeatedly
 - **Network isolation** — run untrusted servers in containers
 
 ## Troubleshooting

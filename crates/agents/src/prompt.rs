@@ -99,6 +99,10 @@ pub struct PromptSandboxRuntimeContext {
 }
 
 /// Info about a single connected remote node, injected into the system prompt.
+///
+/// Only stable fields are included here; volatile telemetry (cpu_usage,
+/// mem_available, disk_available) is served on-demand via the `nodes_list`
+/// / `nodes_describe` tools to avoid invalidating the KV cache.
 #[derive(Debug, Clone)]
 pub struct PromptNodeInfo {
     pub node_id: String,
@@ -106,12 +110,7 @@ pub struct PromptNodeInfo {
     pub platform: String,
     pub capabilities: Vec<String>,
     pub cpu_count: Option<u32>,
-    pub cpu_usage: Option<f32>,
     pub mem_total: Option<u64>,
-    pub mem_available: Option<u64>,
-    pub telemetry_stale: bool,
-    pub disk_total: Option<u64>,
-    pub disk_available: Option<u64>,
     pub runtimes: Vec<String>,
     /// `(provider_name, model_list)` pairs discovered on the node.
     pub providers: Vec<(String, Vec<String>)>,
@@ -236,6 +235,31 @@ pub fn build_system_prompt_minimal_runtime(
     )
 }
 
+/// Build a short datetime string suitable for injection as a trailing system
+/// message, keeping the main system prompt stable for KV cache locality.
+///
+/// Returns `None` when the runtime context has neither `time` nor `today`.
+#[must_use]
+pub fn runtime_datetime_message(runtime_context: Option<&PromptRuntimeContext>) -> Option<String> {
+    let runtime = runtime_context?;
+
+    if let Some(time) = runtime
+        .host
+        .time
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return Some(format!("The current user datetime is {time}."));
+    }
+
+    runtime
+        .host
+        .today
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(|today| format!("The current user date is {today}."))
+}
+
 /// Maximum number of characters from `MEMORY.md` injected into the system
 /// prompt to keep the context window manageable.
 const MEMORY_BOOTSTRAP_MAX_CHARS: usize = 8_000;
@@ -245,13 +269,16 @@ const PROJECT_CONTEXT_MAX_CHARS: usize = 8_000;
 /// Maximum number of characters from each workspace file (`AGENTS.md`,
 /// `TOOLS.md`) injected into the prompt.
 const WORKSPACE_FILE_MAX_CHARS: usize = 6_000;
-const EXEC_ROUTING_GUIDANCE: &str = "Execution routing:\n\
+const EXEC_ROUTING_GUIDANCE_SANDBOX: &str = "Execution routing:\n\
 - `exec` runs inside sandbox when `Sandbox(exec): enabled=true`.\n\
 - When sandbox is disabled, `exec` runs on the host and may require approval.\n\
 - In sandbox mode, `~` and relative paths resolve under `Sandbox(exec): home=...` (usually `/home/sandbox`).\n\
-- Persistent workspace files live under `Host: data_dir=...`; when mounted, the same path appears as `Sandbox(exec): workspace_path=...`.\n\
-- `Host: sudo_non_interactive=true` means non-interactive sudo is available.\n\
-- Sandbox/host routing changes are expected runtime behavior. Do not frame them as surprising or anomalous.\n\n";
+- Persistent workspace files live under `Host: data_dir=...`; when mounted, the same path appears as `Sandbox(exec): workspace_path=...`.\n";
+const EXEC_ROUTING_SANDBOX_CLOSING: &str = "- Sandbox/host routing changes are expected runtime behavior. Do not frame them as surprising or anomalous.\n";
+const EXEC_ROUTING_GUIDANCE_HOST_ONLY: &str = "Execution routing:\n\
+- `exec` runs on the host and may require approval.\n";
+const EXEC_ROUTING_SUDO_HINT: &str =
+    "- `Host: sudo_non_interactive=true` means non-interactive sudo is available.\n";
 /// Build model-family-aware tool call guidance for text-based tool mode.
 fn tool_call_guidance(model_id: Option<&str>) -> String {
     let _family = model_id
@@ -383,7 +410,6 @@ fn build_system_prompt_full(
     append_available_tools_section(&mut prompt, native_tools, &tool_schemas);
     append_tool_call_guidance(&mut prompt, native_tools, &tool_schemas, model_id);
     append_guidelines_section(&mut prompt, include_tools);
-    append_runtime_datetime_tail(&mut prompt, runtime_context);
 
     prompt
 }
@@ -442,18 +468,12 @@ fn format_node_runtime_line(node: &PromptNodeInfo) -> String {
     if let Some(cpus) = node.cpu_count {
         parts.push(format!("{cpus} cores"));
     }
-    if let Some(usage) = node.cpu_usage {
-        parts.push(format!("{usage:.0}% cpu"));
-    }
-    if let (Some(avail), Some(total)) = (node.mem_available, node.mem_total) {
-        let avail_gb = avail as f64 / 1_073_741_824.0;
+    // Volatile telemetry (cpu_usage, mem_available, disk_available) is omitted
+    // from the system prompt to keep it stable for KV cache locality.
+    // Use the `nodes_list` or `nodes_describe` tools for live telemetry.
+    if let Some(total) = node.mem_total {
         let total_gb = total as f64 / 1_073_741_824.0;
-        parts.push(format!("{avail_gb:.0}GB/{total_gb:.0}GB mem"));
-    }
-    if let (Some(avail), Some(total)) = (node.disk_available, node.disk_total) {
-        let avail_gb = avail as f64 / 1_073_741_824.0;
-        let total_gb = total as f64 / 1_073_741_824.0;
-        parts.push(format!("disk: {avail_gb:.0}GB/{total_gb:.0}GB free"));
+        parts.push(format!("{total_gb:.0}GB mem"));
     }
     if !node.runtimes.is_empty() {
         parts.push(format!("runtimes: {}", node.runtimes.join(",")));
@@ -462,12 +482,7 @@ fn format_node_runtime_line(node: &PromptNodeInfo) -> String {
         let names: Vec<&str> = node.providers.iter().map(|(n, _)| n.as_str()).collect();
         parts.push(format!("providers: {}", names.join(",")));
     }
-    let suffix = if node.telemetry_stale {
-        " (stale)"
-    } else {
-        ""
-    };
-    format!("{name} ({}{suffix})", parts.join(", "))
+    format!("{name} ({})", parts.join(", "))
 }
 
 fn format_nodes_runtime_section(nodes_ctx: &PromptNodesRuntimeContext) -> Option<String> {
@@ -489,7 +504,7 @@ fn format_nodes_runtime_section(nodes_ctx: &PromptNodesRuntimeContext) -> Option
 const NODE_ROUTING_GUIDANCE: &str = "\
 - When nodes are connected, the `exec` tool accepts an optional `node` parameter to target a specific node.\n\
 - Omitting `node` runs on the session's default node (shown as [default: ...] above), or locally if none is set.\n\
-- Use node telemetry (CPU, memory) to pick appropriate targets for resource-intensive tasks.\n\n";
+- Use `nodes_list` or `nodes_describe` to check live telemetry (CPU, memory, disk) before picking targets for resource-intensive tasks.\n\n";
 
 fn append_runtime_section(
     prompt: &mut String,
@@ -515,6 +530,7 @@ fn append_runtime_section(
         prompt.push_str(&line);
         prompt.push('\n');
     }
+    let has_sandbox = sandbox_line.is_some();
     if let Some(line) = sandbox_line {
         prompt.push_str(&line);
         prompt.push('\n');
@@ -525,7 +541,18 @@ fn append_runtime_section(
         prompt.push('\n');
     }
     if include_tools {
-        prompt.push_str(EXEC_ROUTING_GUIDANCE);
+        if has_sandbox {
+            prompt.push_str(EXEC_ROUTING_GUIDANCE_SANDBOX);
+        } else {
+            prompt.push_str(EXEC_ROUTING_GUIDANCE_HOST_ONLY);
+        }
+        if runtime.host.sudo_non_interactive == Some(true) {
+            prompt.push_str(EXEC_ROUTING_SUDO_HINT);
+        }
+        if has_sandbox {
+            prompt.push_str(EXEC_ROUTING_SANDBOX_CLOSING);
+        }
+        prompt.push('\n');
         if has_nodes {
             prompt.push_str(NODE_ROUTING_GUIDANCE);
         }
@@ -577,10 +604,11 @@ fn append_memory_section(
     memory_text: Option<&str>,
     tool_schemas: &[serde_json::Value],
 ) {
+    let has_tool_search = has_tool_schema(tool_schemas, "tool_search");
     let has_memory_search = has_tool_schema(tool_schemas, "memory_search");
     let has_memory_save = has_tool_schema(tool_schemas, "memory_save");
     let memory_content = memory_text.filter(|text| !text.is_empty());
-    if memory_content.is_none() && !has_memory_search && !has_memory_save {
+    if memory_content.is_none() && !has_memory_search && !has_memory_save && !has_tool_search {
         return;
     }
 
@@ -621,6 +649,15 @@ fn append_memory_section(
             "- **memory/&lt;topic&gt;.md** — everything else (detailed notes, project ",
             "context, decisions, session summaries). These are only retrieved via ",
             "`memory_search` and do not consume prompt space.\n",
+        ));
+    }
+    // In lazy mode, memory tools are discoverable via tool_search but not
+    // directly visible. Tell the model they exist so it knows to search.
+    if has_tool_search && !has_memory_search && !has_memory_save {
+        prompt.push_str(concat!(
+            "\nMemory tools (`memory_search`, `memory_save`) are available but must be ",
+            "activated first. Use `tool_search(query=\"memory\")` to discover them, ",
+            "then `tool_search(name=\"memory_search\")` to activate.\n",
         ));
     }
     prompt.push('\n');
@@ -684,38 +721,6 @@ fn append_guidelines_section(prompt: &mut String, include_tools: bool) {
     });
 }
 
-fn append_runtime_datetime_tail(
-    prompt: &mut String,
-    runtime_context: Option<&PromptRuntimeContext>,
-) {
-    let Some(runtime) = runtime_context else {
-        return;
-    };
-
-    if let Some(time) = runtime
-        .host
-        .time
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        prompt.push_str("\nThe current user datetime is ");
-        prompt.push_str(time);
-        prompt.push_str(".\n");
-        return;
-    }
-
-    if let Some(today) = runtime
-        .host
-        .today
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        prompt.push_str("\nThe current user date is ");
-        prompt.push_str(today);
-        prompt.push_str(".\n");
-    }
-}
-
 fn push_non_empty_runtime_field(parts: &mut Vec<String>, key: &str, value: Option<&str>) {
     if let Some(value) = value.filter(|value| !value.is_empty()) {
         parts.push(format!("{key}={value}"));
@@ -729,7 +734,6 @@ fn format_host_runtime_line(host: &PromptHostRuntimeContext) -> Option<String> {
         ("os", host.os.as_deref()),
         ("arch", host.arch.as_deref()),
         ("shell", host.shell.as_deref()),
-        ("today", host.today.as_deref()),
         ("provider", host.provider.as_deref()),
         ("model", host.model.as_deref()),
         ("session", host.session_key.as_deref()),
@@ -1088,8 +1092,11 @@ mod tests {
         assert!(prompt.contains("## Runtime"));
         assert!(prompt.contains("Host: host=moltis-devbox"));
         assert!(!prompt.contains("time=2026-02-17 16:18:00 CET"));
-        assert!(prompt.contains("today=2026-02-17"));
-        assert!(prompt.contains("The current user datetime is 2026-02-17 16:18:00 CET."));
+        // Date/time are no longer in the system prompt — they are injected as
+        // a trailing system message for KV cache stability.
+        assert!(!prompt.contains("today="));
+        assert!(!prompt.contains("Today is"));
+        assert!(!prompt.contains("The current user datetime is"));
         assert!(prompt.contains("provider=openai"));
         assert!(prompt.contains("model=gpt-5"));
         assert!(prompt.contains("data_dir=/home/moltis/.moltis"));
@@ -1106,6 +1113,121 @@ mod tests {
         assert!(prompt.contains("Execution routing:"));
         assert!(prompt.contains("`~` and relative paths resolve under"));
         assert!(prompt.contains("Sandbox/host routing changes are expected runtime behavior"));
+        // Sudo hint appears because sudo_non_interactive=true is set.
+        assert!(prompt.contains("sudo_non_interactive=true` means non-interactive sudo"));
+    }
+
+    #[test]
+    fn test_runtime_context_sandbox_without_sudo_omits_sudo_hint() {
+        let tools = ToolRegistry::new();
+        let runtime = PromptRuntimeContext {
+            host: PromptHostRuntimeContext {
+                host: Some("devbox".into()),
+                ..Default::default()
+            },
+            sandbox: Some(PromptSandboxRuntimeContext {
+                exec_sandboxed: true,
+                mode: Some("all".into()),
+                backend: Some("docker".into()),
+                home: Some("/home/sandbox".into()),
+                ..Default::default()
+            }),
+            nodes: None,
+        };
+
+        let prompt = build_system_prompt_with_session_runtime(
+            &tools,
+            true,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&runtime),
+            None,
+        );
+
+        assert!(prompt.contains("Sandbox(exec): enabled=true"));
+        assert!(prompt.contains("Execution routing:"));
+        assert!(prompt.contains("runs inside sandbox"));
+        assert!(prompt.contains("Sandbox/host routing changes are expected runtime behavior"));
+        // Sudo hint must NOT appear when sudo_non_interactive is unset.
+        assert!(!prompt.contains("sudo_non_interactive=true` means non-interactive sudo"));
+    }
+
+    #[test]
+    fn test_runtime_context_no_sandbox_uses_host_only_routing() {
+        let tools = ToolRegistry::new();
+        let runtime = PromptRuntimeContext {
+            host: PromptHostRuntimeContext {
+                host: Some("container-host".into()),
+                os: Some("linux".into()),
+                ..Default::default()
+            },
+            sandbox: None,
+            nodes: None,
+        };
+
+        let prompt = build_system_prompt_with_session_runtime(
+            &tools,
+            true,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&runtime),
+            None,
+        );
+
+        assert!(prompt.contains("## Runtime"));
+        assert!(prompt.contains("Host: host=container-host"));
+        // No sandbox line should appear.
+        assert!(!prompt.contains("Sandbox(exec)"));
+        // Host-only routing guidance should be used.
+        assert!(prompt.contains("Execution routing:"));
+        assert!(prompt.contains("`exec` runs on the host"));
+        // Sandbox-specific guidance should NOT appear.
+        assert!(!prompt.contains("runs inside sandbox"));
+        assert!(!prompt.contains("Sandbox/host routing changes"));
+        // Sudo hint should NOT appear when sudo_non_interactive is not set.
+        assert!(!prompt.contains("sudo_non_interactive"));
+    }
+
+    #[test]
+    fn test_runtime_context_no_sandbox_with_sudo_includes_sudo_hint() {
+        let tools = ToolRegistry::new();
+        let runtime = PromptRuntimeContext {
+            host: PromptHostRuntimeContext {
+                host: Some("container-host".into()),
+                sudo_non_interactive: Some(true),
+                ..Default::default()
+            },
+            sandbox: None,
+            nodes: None,
+        };
+
+        let prompt = build_system_prompt_with_session_runtime(
+            &tools,
+            true,
+            None,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&runtime),
+            None,
+        );
+
+        assert!(prompt.contains("`exec` runs on the host"));
+        assert!(!prompt.contains("runs inside sandbox"));
+        assert!(prompt.contains("sudo_non_interactive=true` means non-interactive sudo"));
     }
 
     #[test]
@@ -1215,10 +1337,7 @@ mod tests {
                 host: Some("moltis-devbox".into()),
                 ..Default::default()
             },
-            sandbox: Some(PromptSandboxRuntimeContext {
-                exec_sandboxed: false,
-                ..Default::default()
-            }),
+            sandbox: None,
             nodes: None,
         };
 
@@ -1235,7 +1354,7 @@ mod tests {
 
         assert!(prompt.contains("## Runtime"));
         assert!(prompt.contains("Host: host=moltis-devbox"));
-        assert!(prompt.contains("Sandbox(exec): enabled=false"));
+        assert!(!prompt.contains("Sandbox(exec)"));
         assert!(!prompt.contains("Execution routing:"));
     }
 
@@ -1437,41 +1556,11 @@ mod tests {
     }
 
     #[test]
-    fn test_datetime_tail_appended_at_end_when_runtime_time_present() {
+    fn test_system_prompt_does_not_contain_datetime() {
         let tools = ToolRegistry::new();
         let runtime = PromptRuntimeContext {
             host: PromptHostRuntimeContext {
                 time: Some("2026-02-17 16:18:00 CET".into()),
-                ..Default::default()
-            },
-            sandbox: None,
-            nodes: None,
-        };
-
-        let prompt = build_system_prompt_with_session_runtime(
-            &tools,
-            true,
-            None,
-            &[],
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(&runtime),
-            None,
-        );
-
-        let expected = "The current user datetime is 2026-02-17 16:18:00 CET.";
-        assert!(prompt.contains(expected));
-        assert!(prompt.trim_end().ends_with(expected));
-    }
-
-    #[test]
-    fn test_datetime_tail_falls_back_to_today_when_time_missing() {
-        let tools = ToolRegistry::new();
-        let runtime = PromptRuntimeContext {
-            host: PromptHostRuntimeContext {
                 today: Some("2026-02-17".into()),
                 ..Default::default()
             },
@@ -1493,39 +1582,56 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("The current user date is 2026-02-17."));
-        assert!(
-            prompt
-                .trim_end()
-                .ends_with("The current user date is 2026-02-17.")
+        // Datetime is no longer in the system prompt — it is injected as a
+        // trailing system message for KV cache stability.
+        assert!(!prompt.contains("The current user datetime is"));
+        assert!(!prompt.contains("The current user date is"));
+    }
+
+    #[test]
+    fn test_runtime_datetime_message_returns_time_when_present() {
+        let runtime = PromptRuntimeContext {
+            host: PromptHostRuntimeContext {
+                time: Some("2026-02-17 16:18:00 CET".into()),
+                today: Some("2026-02-17".into()),
+                ..Default::default()
+            },
+            sandbox: None,
+            nodes: None,
+        };
+
+        let msg = runtime_datetime_message(Some(&runtime));
+        assert_eq!(
+            msg.as_deref(),
+            Some("The current user datetime is 2026-02-17 16:18:00 CET.")
         );
     }
 
     #[test]
-    fn test_datetime_tail_not_injected_without_time_or_date() {
-        let tools = ToolRegistry::new();
+    fn test_runtime_datetime_message_falls_back_to_today() {
+        let runtime = PromptRuntimeContext {
+            host: PromptHostRuntimeContext {
+                today: Some("2026-02-17".into()),
+                ..Default::default()
+            },
+            sandbox: None,
+            nodes: None,
+        };
+
+        let msg = runtime_datetime_message(Some(&runtime));
+        assert_eq!(msg.as_deref(), Some("The current user date is 2026-02-17."));
+    }
+
+    #[test]
+    fn test_runtime_datetime_message_returns_none_without_time_or_date() {
         let runtime = PromptRuntimeContext {
             host: PromptHostRuntimeContext::default(),
             sandbox: None,
             nodes: None,
         };
 
-        let prompt = build_system_prompt_with_session_runtime(
-            &tools,
-            true,
-            None,
-            &[],
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(&runtime),
-            None,
-        );
-
-        assert!(!prompt.contains("The current user datetime is "));
-        assert!(!prompt.contains("The current user date is "));
+        assert!(runtime_datetime_message(Some(&runtime)).is_none());
+        assert!(runtime_datetime_message(None).is_none());
     }
 
     // ── Phase 4: ModelFamily, compact schema, tool call guidance ────────

@@ -12,6 +12,10 @@ import { ConfirmDialog, requestConfirm } from "./ui.js";
 // ── Signals ─────────────────────────────────────────────────
 var servers = signal([]);
 var loading = signal(false);
+var configLoading = signal(false);
+var configSaving = signal(false);
+var requestTimeoutSecs = signal("30");
+var configDirty = signal(false);
 var toasts = signal([]);
 var toastId = 0;
 
@@ -38,6 +42,44 @@ async function refreshServers() {
 	}
 	loading.value = false;
 	updateNavCount("mcp", servers.value.filter((s) => s.state === "running").length);
+}
+
+async function refreshConfig() {
+	configLoading.value = true;
+	try {
+		var res = await sendRpc("mcp.config.get", {});
+		if (res?.ok && res.payload) {
+			requestTimeoutSecs.value = String(res.payload.request_timeout_secs || 30);
+			configDirty.value = false;
+		}
+	} finally {
+		configLoading.value = false;
+	}
+}
+
+async function saveConfig() {
+	var timeout = normalizeOptionalTimeout(requestTimeoutSecs.value);
+	if (!timeout.ok || timeout.value === null) {
+		showToast("MCP request timeout must be a positive number of seconds", "error");
+		return;
+	}
+
+	configSaving.value = true;
+	try {
+		var res = await sendRpc("mcp.config.update", {
+			request_timeout_secs: timeout.value,
+		});
+		if (res?.ok) {
+			requestTimeoutSecs.value = String(res.payload?.request_timeout_secs || timeout.value);
+			configDirty.value = false;
+			showToast("Saved MCP settings. Restart affected MCP servers to apply the new timeout.", "success");
+		} else {
+			var msg = res?.error?.message || res?.error || "unknown error";
+			showToast(`Failed to save MCP settings: ${msg}`, "error");
+		}
+	} finally {
+		configSaving.value = false;
+	}
 }
 
 async function addServer(payload) {
@@ -95,6 +137,112 @@ function parseEnvLines(text) {
 		}
 	}
 	return env;
+}
+
+function safeRemoteUrlText(server) {
+	return typeof server.url === "string" ? server.url.trim() : "";
+}
+
+function remoteHeaderNames(server) {
+	var names = [];
+	if (Array.isArray(server.header_names)) {
+		names = server.header_names;
+	} else if (Array.isArray(server.headerNames)) {
+		names = server.headerNames;
+	} else if (server.headers && typeof server.headers === "object") {
+		names = Object.keys(server.headers);
+	}
+	return names.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim());
+}
+
+function remoteHeaderCount(server) {
+	var explicitCount =
+		typeof server.header_count === "number"
+			? server.header_count
+			: typeof server.headerCount === "number"
+				? server.headerCount
+				: null;
+	if (explicitCount !== null && Number.isFinite(explicitCount) && explicitCount >= 0) return explicitCount;
+	return remoteHeaderNames(server).length;
+}
+
+function remoteHeaderSummary(server) {
+	var names = remoteHeaderNames(server);
+	var count = remoteHeaderCount(server);
+	if (count === 0 && names.length === 0) return "none configured";
+	if (names.length === 0) return `${count} configured`;
+	var label = count === 1 ? "1 total" : `${count} total`;
+	return `${names.join(", ")} (${label})`;
+}
+
+function buildSseEditPayload(server, editUrlText, editHeadersText, clearHeaders) {
+	var isExistingSse = (server.transport || "stdio") === "sse";
+	var replacementUrl = editUrlText.trim();
+	if (!(replacementUrl || isExistingSse)) {
+		return { error: "Remote MCP servers require a URL" };
+	}
+	var payload = {
+		command: "",
+		args: [],
+	};
+	if (replacementUrl) payload.url = replacementUrl;
+
+	var replacementHeaders = editHeadersText.trim();
+	if (clearHeaders) {
+		payload.headers = {};
+	} else if (replacementHeaders) {
+		payload.headers = parseEnvLines(editHeadersText);
+	} else if (!isExistingSse) {
+		payload.headers = {};
+	}
+	return { payload };
+}
+
+function buildStdioEditPayload(editCmdText, editArgsText, editEnvText) {
+	var command = editCmdText.trim();
+	if (!command) {
+		return { error: "Local stdio servers require a command" };
+	}
+	return {
+		payload: {
+			command,
+			args: editArgsText.split(/\s+/).filter(Boolean),
+			env: parseEnvLines(editEnvText),
+			headers: {},
+			url: null,
+		},
+	};
+}
+
+function normalizeOptionalTimeout(rawValue) {
+	var trimmed = String(rawValue || "").trim();
+	if (!trimmed) return { ok: true, value: null };
+	if (!/^\d+$/.test(trimmed)) {
+		return { ok: false, message: "Timeout override must be a positive number of seconds" };
+	}
+	var parsed = Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return { ok: false, message: "Timeout override must be a positive number of seconds" };
+	}
+	return { ok: true, value: parsed };
+}
+
+function getTimeoutOverrideOrNotify(rawValue) {
+	var timeoutOverride = normalizeOptionalTimeout(rawValue);
+	if (!timeoutOverride.ok) {
+		showToast(timeoutOverride.message, "error");
+		return null;
+	}
+	return timeoutOverride.value;
+}
+
+function resolveTimeoutOrAbort(rawValue, setBusy) {
+	var timeoutOverride = getTimeoutOverrideOrNotify(rawValue);
+	if (timeoutOverride === null && String(rawValue || "").trim()) {
+		setBusy(false);
+		return { ok: false };
+	}
+	return { ok: true, value: timeoutOverride };
 }
 
 // ── Featured MCP servers ────────────────────────────────────
@@ -170,7 +318,18 @@ function authStateLabel(state) {
 	return "OAuth not required";
 }
 
-function ConfigForm({ server, argsVal, envVal, urlVal, onCancel }) {
+/** Render server name with optional technical ID badge */
+function renderServerName({ server }) {
+	var displayName = server.display_name || server.name;
+	var showTechnical = server.display_name && server.display_name !== server.name;
+	if (showTechnical) {
+		return html`<span class="text-sm font-medium text-[var(--text-strong)]">${displayName}</span>
+			<span class="text-[0.62rem] px-1.5 py-px rounded-full bg-[var(--surface2)] text-[var(--muted)] font-mono">${server.name}</span>`;
+	}
+	return html`<span class="text-sm font-medium text-[var(--text-strong)]">${displayName}</span>`;
+}
+
+function ConfigForm({ server, argsVal, envVal, urlVal, headerVal, timeoutVal, onCancel }) {
 	var isSse = server.transport === "sse";
 	return html`<div class="mt-2 flex flex-col gap-1.5">
 	    ${server.hint && html`<div class="text-xs text-[var(--warn)]">${server.hint}</div>`}
@@ -183,6 +342,19 @@ function ConfigForm({ server, argsVal, envVal, urlVal, onCancel }) {
 							urlVal.value = e.target.value;
 						}}
 	          class="provider-key-input w-full font-mono" />
+	        <div class="text-xs text-[var(--muted)] mt-1">Optional request headers go below, one per line as KEY=VALUE. URL query values may use <code>$NAME</code> or <code>${"{NAME}"}</code> placeholders from Settings → Environment Variables.</div>
+	      </div>
+	      <div class="project-edit-group">
+	        <div class="text-xs text-[var(--muted)] mb-1">Request headers (optional, KEY=VALUE per line)</div>
+	        <textarea value=${headerVal.value}
+	          onInput=${(e) => {
+							headerVal.value = e.target.value;
+						}}
+	          rows="3"
+	          class="provider-key-input w-full resize-y font-mono text-sm"
+	          placeholder="Authorization=Bearer ..."
+	        />
+	        <div class="text-xs text-[var(--muted)] mt-1">Stored header values stay hidden after save. Header values may also use <code>$NAME</code> or <code>${"{NAME}"}</code> placeholders.</div>
 	      </div>`
 					: html`<div class="project-edit-group">
 	      <div class="text-xs text-[var(--muted)] mb-1">Arguments</div>
@@ -207,6 +379,15 @@ function ConfigForm({ server, argsVal, envVal, urlVal, onCancel }) {
           class="provider-key-input w-full resize-y" />
       </div>`
 			}
+	    <div class="project-edit-group">
+	      <div class="text-xs text-[var(--muted)] mb-1">Timeout override (seconds, optional)</div>
+	      <input type="number" min="1" step="1" value=${timeoutVal.value}
+	        placeholder="Use global default"
+	        onInput=${(e) => {
+						timeoutVal.value = e.target.value;
+					}}
+	        class="provider-key-input w-full" />
+	    </div>
     <button onClick=${onCancel}
       class="self-start provider-btn provider-btn-secondary provider-btn-sm">Cancel</button>
   </div>`;
@@ -226,11 +407,20 @@ function FeaturedCard(props) {
 	var argsVal = useSignal((f.args || []).join(" "));
 	var envVal = useSignal((f.envKeys || []).map((k) => `${k}=`).join("\n"));
 	var urlVal = useSignal(f.url || "");
+	var headerVal = useSignal("");
+	var timeoutVal = useSignal("");
 
-	var needsConfig = Boolean(
-		f.requiresConfig || (f.envKeys && f.envKeys.length > 0) || (f.transport === "sse" && !f.url),
-	);
+	var needsConfig = Boolean(f.requiresConfig || (f.envKeys && f.envKeys.length > 0) || f.transport === "sse");
 	var isSse = f.transport === "sse";
+
+	async function addConfiguredFeaturedServer(payload) {
+		try {
+			await addServer(payload);
+			configuring.value = false;
+		} finally {
+			installing.value = false;
+		}
+	}
 
 	function onAdd() {
 		if (needsConfig && !configuring.value) {
@@ -238,6 +428,11 @@ function FeaturedCard(props) {
 			return;
 		}
 		installing.value = true;
+		var timeoutResult = resolveTimeoutOrAbort(timeoutVal.value, (next) => {
+			installing.value = next;
+		});
+		if (!timeoutResult.ok) return;
+
 		if (isSse) {
 			var url = (urlVal.value || "").trim();
 			if (!url) {
@@ -245,29 +440,25 @@ function FeaturedCard(props) {
 				installing.value = false;
 				return;
 			}
-			addServer({
+			addConfiguredFeaturedServer({
+				headers: parseEnvLines(headerVal.value),
 				name: f.name,
 				command: "",
 				args: [],
-				env: {},
 				transport: "sse",
 				url,
-			}).then(() => {
-				installing.value = false;
-				configuring.value = false;
+				request_timeout_secs: timeoutResult.value,
 			});
 			return;
 		}
 		var argsList = argsVal.value.split(/\s+/).filter(Boolean);
 		var env = parseEnvLines(envVal.value);
-		addServer({
+		addConfiguredFeaturedServer({
 			name: f.name,
 			command: f.command,
 			args: argsList,
 			env,
-		}).then(() => {
-			installing.value = false;
-			configuring.value = false;
+			request_timeout_secs: timeoutResult.value,
 		});
 	}
 
@@ -289,7 +480,7 @@ function FeaturedCard(props) {
     ${
 			configuring.value &&
 			html`<div class="px-3 pb-3 border border-t-0 border-[var(--border)] rounded-b-[var(--radius-sm)]">
-	        <${ConfigForm} server=${f} argsVal=${argsVal} envVal=${envVal} urlVal=${urlVal} onCancel=${() => {
+	        <${ConfigForm} server=${f} argsVal=${argsVal} envVal=${envVal} urlVal=${urlVal} headerVal=${headerVal} timeoutVal=${timeoutVal} onCancel=${() => {
 						configuring.value = false;
 					}} />
 	      </div>`
@@ -361,27 +552,51 @@ function InstallBox() {
 	var showEnv = useSignal(false);
 	var transportType = useSignal("stdio");
 	var sseUrl = useSignal("");
+	var sseHeaders = useSignal("");
+	var timeoutVal = useSignal("");
+	var displayNameVal = useSignal("");
 
 	var isSse = transportType.value === "sse";
 	var canAdd = isSse ? sseUrl.value.trim().length > 0 : cmdLine.value.trim().length > 0;
 	var detectedName = isSse ? deriveSseName(sseUrl.value) : deriveNameFromCommand(cmdLine.value);
 
+	async function addCustomServer(payload, onReset) {
+		try {
+			await addServer(payload);
+			onReset();
+		} finally {
+			adding.value = false;
+		}
+	}
+
 	function onAdd() {
 		if (!canAdd) return;
 		adding.value = true;
+		var timeoutResult = resolveTimeoutOrAbort(timeoutVal.value, (next) => {
+			adding.value = next;
+		});
+		if (!timeoutResult.ok) return;
+
 		if (isSse) {
 			var sseName = detectedName || "remote";
-			addServer({
-				name: sseName,
-				command: "",
-				args: [],
-				env: {},
-				transport: "sse",
-				url: sseUrl.value.trim(),
-			}).then(() => {
-				adding.value = false;
-				sseUrl.value = "";
-			});
+			addCustomServer(
+				{
+					name: sseName,
+					display_name: displayNameVal.value.trim() || null,
+					command: "",
+					args: [],
+					headers: parseEnvLines(sseHeaders.value),
+					transport: "sse",
+					url: sseUrl.value.trim(),
+					request_timeout_secs: timeoutResult.value,
+				},
+				() => {
+					sseUrl.value = "";
+					sseHeaders.value = "";
+					timeoutVal.value = "";
+					displayNameVal.value = "";
+				},
+			);
 			return;
 		}
 		var parts = cmdLine.value.trim().split(/\s+/).filter(Boolean);
@@ -389,16 +604,22 @@ function InstallBox() {
 		var argsList = parts.slice(1);
 		var name = detectedName || command;
 		var env = parseEnvLines(envVal.value);
-		addServer({
-			name,
-			command,
-			args: argsList,
-			env,
-		}).then(() => {
-			adding.value = false;
-			cmdLine.value = "";
-			envVal.value = "";
-		});
+		addCustomServer(
+			{
+				name,
+				display_name: displayNameVal.value.trim() || null,
+				command,
+				args: argsList,
+				env,
+				request_timeout_secs: timeoutResult.value,
+			},
+			() => {
+				cmdLine.value = "";
+				envVal.value = "";
+				timeoutVal.value = "";
+				displayNameVal.value = "";
+			},
+		);
 	}
 
 	function onKey(e) {
@@ -427,7 +648,18 @@ function InstallBox() {
 					cmdLine.value = e.target.value;
 				}}
         onKeyDown=${onKey} />
-      ${detectedName && html`<div class="text-xs text-[var(--muted)] mt-1">Name: <span class="font-mono text-[var(--text-strong)]">${detectedName}</span> <span class="opacity-60">(editable after adding)</span></div>`}
+      ${
+				detectedName &&
+				html`<div class="project-edit-group mt-2">
+        <div class="text-xs text-[var(--muted)] mb-1">Display name (optional)</div>
+        <input type="text" class="provider-key-input w-full" placeholder="${detectedName}"
+          value=${displayNameVal.value}
+          onInput=${(e) => {
+						displayNameVal.value = e.target.value;
+					}} />
+        <div class="text-xs text-[var(--muted)] mt-1">Technical ID: <span class="font-mono">${detectedName}</span></div>
+      </div>`
+			}
     </div>`
 		}
     ${
@@ -440,8 +672,29 @@ function InstallBox() {
 						sseUrl.value = e.target.value;
 					}}
 	        onKeyDown=${onKey} />
-	      ${detectedName && html`<div class="text-xs text-[var(--muted)] mt-1">Name: <span class="font-mono text-[var(--text-strong)]">${detectedName}</span></div>`}
-	      <div class="text-xs text-[var(--muted)] mt-1">If the server requires OAuth, your browser opens for sign-in when you enable or restart it.</div>
+	      ${
+					detectedName &&
+					html`<div class="project-edit-group mt-2">
+	        <div class="text-xs text-[var(--muted)] mb-1">Display name (optional)</div>
+	        <input type="text" class="provider-key-input w-full" placeholder="${detectedName}"
+	          value=${displayNameVal.value}
+	          onInput=${(e) => {
+							displayNameVal.value = e.target.value;
+						}} />
+	        <div class="text-xs text-[var(--muted)] mt-1">Technical ID: <span class="font-mono">${detectedName}</span></div>
+	      </div>`
+				}
+	      <div class="text-xs text-[var(--muted)] mt-1">If the server requires OAuth, your browser opens for sign-in when you enable or restart it. URL query values may use <code>$NAME</code> or <code>${"{NAME}"}</code> placeholders from Settings → Environment Variables.</div>
+	    </div>
+	    <div class="project-edit-group mb-2">
+	      <div class="text-xs text-[var(--muted)] mb-1">Request headers (optional, KEY=VALUE per line)</div>
+	      <textarea class="provider-key-input w-full min-h-[72px] resize-y font-mono text-sm" placeholder="Authorization=Bearer ..."
+	        rows="3"
+	        value=${sseHeaders.value}
+	        onInput=${(e) => {
+						sseHeaders.value = e.target.value;
+					}} />
+	      <div class="text-xs text-[var(--muted)] mt-1">Optional request headers are sent to the remote MCP host. Stored header values stay hidden after save, and values may use <code>$NAME</code> or <code>${"{NAME}"}</code> placeholders.</div>
 	    </div>`
 		}
     ${
@@ -456,6 +709,15 @@ function InstallBox() {
 					}} />
       </div>`
 		}
+    <div class="project-edit-group mb-2">
+      <div class="text-xs text-[var(--muted)] mb-1">Timeout override (seconds, optional)</div>
+      <input type="number" class="provider-key-input w-full font-mono" min="1" step="1" placeholder="Use global default"
+        value=${timeoutVal.value}
+        onInput=${(e) => {
+					timeoutVal.value = e.target.value;
+				}}
+        onKeyDown=${onKey} />
+    </div>
 	    <div class="flex gap-2 items-center">
 	      <button class="provider-btn" onClick=${onAdd} disabled=${adding.value || !canAdd}>
 	        ${adding.value ? "Adding\u2026" : "Add"}
@@ -484,10 +746,16 @@ function ServerCard({ server }) {
 	var editArgs = useSignal("");
 	var editEnv = useSignal("");
 	var editUrl = useSignal("");
+	var editHeaders = useSignal("");
+	var editDisplayName = useSignal("");
+	var clearHeaders = useSignal(false);
+	var editTimeout = useSignal("");
 	var saving = useSignal(false);
 	var reauthing = useSignal(false);
 	var isSse = (server.transport || "stdio") === "sse";
 	var authState = server.auth_state || "not_required";
+	var currentSafeUrl = safeRemoteUrlText(server);
+	var currentHeaderSummary = remoteHeaderSummary(server);
 
 	async function toggleTools() {
 		expanded.value = !expanded.value;
@@ -550,7 +818,7 @@ function ServerCard({ server }) {
 		e.stopPropagation();
 		reauthing.value = true;
 		try {
-			await startMcpOAuth(server.name, server.auth_url || null);
+			await startMcpOAuth(server.name, null);
 			showToast(`OAuth started for "${server.name}"`, "success");
 		} catch (error) {
 			showToast(`Failed to start OAuth: ${error.message}`, "error");
@@ -567,50 +835,57 @@ function ServerCard({ server }) {
 		editEnv.value = Object.entries(server.env || {})
 			.map(([k, v]) => `${k}=${v}`)
 			.join("\n");
-		editUrl.value = server.url || "";
+		editUrl.value = "";
+		editHeaders.value = "";
+		clearHeaders.value = false;
+		editTimeout.value = server.request_timeout_secs == null ? "" : String(server.request_timeout_secs);
+		editDisplayName.value = server.display_name || "";
 		editing.value = true;
+	}
+
+	function buildEditPayload() {
+		var transport = editTransport.value === "sse" ? "sse" : "stdio";
+		var timeoutResult = resolveTimeoutOrAbort(editTimeout.value, (next) => {
+			saving.value = next;
+		});
+		if (!timeoutResult.ok) return null;
+
+		var editResult =
+			transport === "sse"
+				? buildSseEditPayload(server, editUrl.value, editHeaders.value, clearHeaders.value)
+				: buildStdioEditPayload(editCmd.value, editArgs.value, editEnv.value);
+		if (editResult.error) {
+			showToast(editResult.error, "error");
+			saving.value = false;
+			return null;
+		}
+
+		return {
+			name: server.name,
+			transport,
+			request_timeout_secs: timeoutResult.value,
+			...editResult.payload,
+			display_name: editDisplayName.value.trim() || null,
+		};
 	}
 
 	async function saveEdit() {
 		saving.value = true;
-		var transport = editTransport.value === "sse" ? "sse" : "stdio";
-		var payload = {
-			name: server.name,
-			transport,
-		};
-		if (transport === "sse") {
-			var url = editUrl.value.trim();
-			if (!url) {
-				showToast("Remote MCP servers require a URL", "error");
-				saving.value = false;
-				return;
+		try {
+			var payload = buildEditPayload();
+			if (!payload) return;
+			var res = await sendRpc("mcp.update", payload);
+			if (res?.ok) {
+				showToast(`Updated "${server.name}"`, "success");
+				editing.value = false;
+			} else {
+				var msg = res?.error?.message || res?.error || "unknown error";
+				showToast(`Failed to update: ${msg}`, "error");
 			}
-			payload.command = "";
-			payload.args = [];
-			payload.env = {};
-			payload.url = url;
-		} else {
-			var command = editCmd.value.trim();
-			if (!command) {
-				showToast("Local stdio servers require a command", "error");
-				saving.value = false;
-				return;
-			}
-			payload.command = command;
-			payload.args = editArgs.value.split(/\s+/).filter(Boolean);
-			payload.env = parseEnvLines(editEnv.value);
-			payload.url = null;
+			await refreshServers();
+		} finally {
+			saving.value = false;
 		}
-		var res = await sendRpc("mcp.update", payload);
-		if (res?.ok) {
-			showToast(`Updated "${server.name}"`, "success");
-			editing.value = false;
-		} else {
-			var msg = res?.error?.message || res?.error || "unknown error";
-			showToast(`Failed to update: ${msg}`, "error");
-		}
-		saving.value = false;
-		await refreshServers();
 	}
 
 	function remove(e) {
@@ -631,9 +906,10 @@ function ServerCard({ server }) {
       <div class="flex items-center gap-2">
         <span class="text-[0.65rem] text-[var(--muted)] transition-transform duration-150 ${expanded.value ? "rotate-90" : ""}">\u25B6</span>
         <${StatusBadge} state=${server.state} />
-        <span class="font-mono text-sm font-medium text-[var(--text-strong)]">${server.name}</span>
+        <${renderServerName} server=${server} />
         <span class="text-[0.62rem] px-1.5 py-px rounded-full bg-[var(--surface2)] text-[var(--muted)] font-medium">${server.state || "stopped"}</span>
         <span class="text-[0.62rem] px-1.5 py-px rounded-full bg-[var(--surface2)] text-[var(--muted)] font-medium">${transportLabel(server.transport)}</span>
+        <span class="text-[0.62rem] px-1.5 py-px rounded-full bg-[var(--surface2)] text-[var(--muted)] font-medium">timeout ${server.configured_request_timeout_secs}s</span>
         <span class="text-xs text-[var(--muted)]">${server.tool_count} tool${server.tool_count !== 1 ? "s" : ""}${server.state === "running" && server.tool_count > 0 ? ` · ~${server.tool_count * 300} tokens` : ""}</span>
       </div>
       <div class="flex items-center gap-1.5">
@@ -674,15 +950,46 @@ function ServerCard({ server }) {
 	              class="provider-btn provider-btn-sm ${editTransport.value === "sse" ? "" : "provider-btn-secondary"}">SSE (remote)</button>
 	          </div>
 	        </div>
+        ${html`<div class="project-edit-group mb-2">
+		  <div class="text-xs text-[var(--muted)] mb-1">Display name (optional)</div>
+		  <input type="text" class="provider-key-input w-full" value=${editDisplayName.value}
+		    placeholder=${server.display_name || server.name}
+		    onInput=${(e) => {
+					editDisplayName.value = e.target.value;
+				}} />
+		  <div class="text-xs text-[var(--muted)] mt-1">Technical ID: <span class="font-mono">${server.name}</span></div>
+		</div>`}
 	        ${
 						editTransport.value === "sse" &&
 						html`<div class="project-edit-group mb-2">
-	          <div class="text-xs text-[var(--muted)] mb-1">Server URL</div>
+	          <div class="text-xs text-[var(--muted)] mb-1">Current URL</div>
+	          <div class="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-xs font-mono text-[var(--text)]">${currentSafeUrl || "(stored URL hidden until the API returns sanitized text)"}</div>
+	          <div class="text-xs text-[var(--muted)] mt-2 mb-1">Replace URL (leave blank to keep the current URL)</div>
 	          <input type="text" class="provider-key-input w-full font-mono" value=${editUrl.value}
+	            placeholder=${currentSafeUrl || "https://mcp.example.com/mcp"}
 	            onInput=${(e) => {
 								editUrl.value = e.target.value;
 							}} />
-	          <div class="text-xs text-[var(--muted)] mt-1">OAuth (if required) runs in your browser when the server is enabled.</div>
+	          <div class="text-xs text-[var(--muted)] mt-1">Leave this blank to preserve the stored URL. Query values may use <code>$NAME</code> or <code>${"{NAME}"}</code> placeholders. OAuth, if required, runs in your browser when the server is enabled.</div>
+	        </div>
+	        <div class="project-edit-group mb-2">
+	          <div class="text-xs text-[var(--muted)] mb-1">Current headers</div>
+	          <div class="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-xs font-mono text-[var(--text)]">${currentHeaderSummary}</div>
+	          <div class="mt-2">
+	            <button onClick=${() => {
+								clearHeaders.value = !clearHeaders.value;
+							}}
+	              class="provider-btn provider-btn-secondary provider-btn-sm">${clearHeaders.value ? "Keep stored headers" : "Clear stored headers"}</button>
+	          </div>
+	          <div class="text-xs text-[var(--muted)] mt-2 mb-1">Replace headers (optional, KEY=VALUE per line)</div>
+	          <textarea class="provider-key-input w-full min-h-[72px] resize-y font-mono text-sm" rows="3"
+	            placeholder="Authorization=Bearer ..."
+	            value=${editHeaders.value}
+	            disabled=${clearHeaders.value}
+	            onInput=${(e) => {
+								editHeaders.value = e.target.value;
+							}} />
+	          <div class="text-xs text-[var(--muted)] mt-1">${clearHeaders.value ? html`Saving now removes every stored header for this remote server.` : html`Leave blank to preserve stored headers. Enter new lines to replace them, or click <strong>Clear stored headers</strong> to remove them entirely. Use <code>$NAME</code> or <code>${"{NAME}"}</code> for env-backed values.`}</div>
 	        </div>`
 					}
 	        ${
@@ -712,6 +1019,14 @@ function ServerCard({ server }) {
         </div>
         </div>`
 					}
+        <div class="project-edit-group mb-2">
+          <div class="text-xs text-[var(--muted)] mb-1">Timeout override (seconds, optional)</div>
+          <input type="number" class="provider-key-input w-full font-mono" min="1" step="1" placeholder="Use global default"
+            value=${editTimeout.value}
+            onInput=${(e) => {
+							editTimeout.value = e.target.value;
+						}} />
+        </div>
         <div class="flex gap-2">
           <button class="provider-btn" onClick=${saveEdit} disabled=${saving.value}>
             ${saving.value ? "Saving\u2026" : "Save"}
@@ -731,19 +1046,16 @@ function ServerCard({ server }) {
 					? html`<div>
 	      <div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
 	        <span class="opacity-60">URL</span>
-	        <code class="font-mono text-[var(--text)]">${server.url || "(missing URL)"}</code>
+	        <code class="font-mono text-[var(--text)]">${currentSafeUrl || "(stored URL hidden until the API returns sanitized text)"}</code>
+	      </div>
+	      <div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
+	        <span class="opacity-60">HEADERS</span>
+	        <code class="font-mono text-[var(--text)]">${currentHeaderSummary}</code>
 	      </div>
 	      <div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
 	        <span class="opacity-60">AUTH</span>
 	        <span class="${authState === "failed" ? "text-[var(--error)]" : "text-[var(--text)]"}">${authStateLabel(authState)}</span>
 	      </div>
-	      ${
-					server.auth_url &&
-					html`<div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
-	        <span class="opacity-60">AUTH URL</span>
-	        <code class="font-mono text-[var(--text)] overflow-hidden text-ellipsis whitespace-nowrap">${server.auth_url}</code>
-	      </div>`
-				}
 	      ${
 					(authState === "awaiting_browser" || authState === "failed") &&
 					html`<div class="py-1.5">
@@ -751,10 +1063,30 @@ function ServerCard({ server }) {
 	          class="provider-btn provider-btn-secondary provider-btn-sm">${reauthing.value ? "\u2026" : "Connect OAuth"}</button>
 	      </div>`
 				}
+	      <div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
+	        <span class="opacity-60">TIMEOUT</span>
+	        <span class="text-[var(--text)]">
+	          ${
+							server.request_timeout_secs == null
+								? `${server.configured_request_timeout_secs}s (global default)`
+								: `${server.request_timeout_secs}s override`
+						}
+	        </span>
+	      </div>
 	    </div>`
 					: html`<div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
         <span class="opacity-60">$</span>
         <code class="font-mono text-[var(--text)]">${server.command} ${(server.args || []).join(" ")}</code>
+      </div>
+      <div class="flex items-center gap-1.5 py-1.5 text-xs text-[var(--muted)]">
+        <span class="opacity-60">TIMEOUT</span>
+        <span class="text-[var(--text)]">
+          ${
+						server.request_timeout_secs == null
+							? `${server.configured_request_timeout_secs}s (global default)`
+							: `${server.request_timeout_secs}s override`
+					}
+        </span>
       </div>`
 			}
       ${!tools.value && html`<div class="text-[var(--muted)] text-sm py-2">Loading tools\u2026</div>`}
@@ -791,9 +1123,50 @@ function ConfiguredServersSection() {
   </div>`;
 }
 
+function ConfigSection() {
+	return html`<div class="max-w-[600px] bg-[var(--surface2)] border border-[var(--border)] rounded-[var(--radius)] px-5 py-4">
+    <div class="flex items-center justify-between gap-3 mb-2">
+      <h3 class="text-sm font-medium text-[var(--text-strong)]">Request Timeout</h3>
+      <button
+        class="provider-btn provider-btn-secondary provider-btn-sm"
+        onClick=${refreshConfig}
+        disabled=${configLoading.value || configSaving.value}
+      >${configLoading.value ? "Loading\u2026" : "Reload"}</button>
+    </div>
+    <p class="text-xs text-[var(--muted)] mb-3">
+      Controls how long Moltis waits for an MCP server response before failing the request. This applies to both local stdio servers and remote SSE servers.
+    </p>
+    <div class="flex flex-wrap items-end gap-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs text-[var(--muted)]">Timeout (seconds)</span>
+        <input
+          type="number"
+          min="1"
+          step="1"
+          value=${requestTimeoutSecs.value}
+          onInput=${(e) => {
+						requestTimeoutSecs.value = e.target.value;
+						configDirty.value = true;
+					}}
+          class="provider-key-input w-[140px]"
+        />
+      </label>
+      <button
+        class="provider-btn provider-btn-sm"
+        onClick=${saveConfig}
+        disabled=${configSaving.value || configLoading.value || !configDirty.value}
+      >${configSaving.value ? "Saving\u2026" : "Save"}</button>
+    </div>
+    <div class="text-xs text-[var(--muted)] mt-3">
+      Saving updates <code>mcp.request_timeout_secs</code> in your config file. Existing MCP connections keep using the old timeout until those servers are restarted.
+    </div>
+  </div>`;
+}
+
 function McpPage() {
 	useEffect(() => {
 		refreshServers();
+		refreshConfig();
 		// Listen for health status broadcasts from the server.
 		var off = onEvent("mcp.status", (payload) => {
 			if (Array.isArray(payload)) {
@@ -833,6 +1206,7 @@ function McpPage() {
 	        <div class="mt-1">Remote SSE servers can receive your tool inputs and act in linked external systems. Use trusted hosts and only scopes you intend to grant.</div>
 	        <div class="mt-1">Each enabled server also adds tool definitions to chat context and consumes tokens, enable only what you actively need.</div>
 	      </div>
+      <${ConfigSection} />
       <${InstallBox} />
       <${FeaturedSection} />
       <${ConfiguredServersSection} />
