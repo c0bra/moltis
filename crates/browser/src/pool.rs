@@ -386,14 +386,13 @@ impl BrowserPool {
             // and contains only ephemeral Chrome profile data (cache, cookies, local
             // storage). It is not a system directory and has no security-sensitive content.
             if let Some(ref dir) = profile_dir {
-                if let Err(e) = std::fs::create_dir_all(dir) {
-                    warn!(
+                match std::fs::create_dir_all(dir) {
+                    Err(e) => warn!(
                         path = %dir.display(),
                         error = %e,
                         "failed to create browser profile directory for container"
-                    );
-                } else {
-                    set_container_dir_permissions(dir);
+                    ),
+                    Ok(()) => set_container_dir_permissions(dir),
                 }
             }
 
