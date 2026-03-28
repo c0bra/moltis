@@ -17,6 +17,7 @@ use moltis_providers::ProviderRegistry;
 
 use moltis_tools::{
     approval::{ApprovalManager, ApprovalMode, SecurityLevel},
+    checkpoints::{CheckpointRestoreTool, CheckpointsListTool},
     exec::EnvVarProvider,
     sessions_communicate::{
         SendToSessionFn, SendToSessionRequest, SessionsHistoryTool, SessionsListTool,
@@ -3514,6 +3515,8 @@ pub async fn prepare_gateway_core(
             Arc::clone(&session_metadata),
             send_to_session,
         )));
+        tool_registry.register(Box::new(CheckpointsListTool::new(data_dir.clone())));
+        tool_registry.register(Box::new(CheckpointRestoreTool::new(data_dir.clone())));
 
         // Register shared task coordination tool for multi-agent workflows.
         tool_registry.register(Box::new(moltis_tools::task_list::TaskListTool::new(
