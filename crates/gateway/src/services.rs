@@ -1480,11 +1480,11 @@ impl GatewayServices {
         self
     }
 
-    /// Create a [`Services`] bundle for sharing with the GraphQL schema.
+    /// Create a [`Services`] bundle with an injected `chat` and `system_info`.
     ///
-    /// Clones all service `Arc`s (cheap pointer bumps) into the shared bundle.
-    /// The `system_info` service is provided separately because it needs the
-    /// fully-constructed `GatewayState` which isn't available during
+    /// Clones all other service `Arc`s (cheap pointer bumps) into the shared
+    /// bundle. The `system_info` service is provided separately because it
+    /// needs the fully-constructed `GatewayState` which isn't available during
     /// `GatewayServices` construction.
     pub fn to_services_with_chat(
         &self,

@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![cfg(feature = "graphql")]
 
 use std::{
     net::SocketAddr,
@@ -87,11 +88,10 @@ impl ChatService for RecordingChatService {
     }
 }
 
-async fn start_graphql_server() -> (SocketAddr, Arc<GatewayState>) {
+async fn start_graphql_server() -> (SocketAddr, Arc<GatewayState>, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     moltis_config::set_config_dir(tmp.path().to_path_buf());
     moltis_config::set_data_dir(tmp.path().to_path_buf());
-    std::mem::forget(tmp);
 
     let state = GatewayState::new(auth::resolve_auth(None, None), GatewayServices::noop());
     let state_clone = Arc::clone(&state);
@@ -114,13 +114,12 @@ async fn start_graphql_server() -> (SocketAddr, Arc<GatewayState>) {
         .unwrap();
     });
 
-    (addr, state_clone)
+    (addr, state_clone, tmp)
 }
 
-#[cfg(feature = "graphql")]
 #[tokio::test]
 async fn graphql_chat_uses_late_bound_override_after_schema_build() {
-    let (addr, state) = start_graphql_server().await;
+    let (addr, state, _tmp) = start_graphql_server().await;
 
     let chat = Arc::new(RecordingChatService::default());
     state
