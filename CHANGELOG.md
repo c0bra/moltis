@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [20260328.03] - 2026-03-28
+### Fixed
+- [telegram] Route forum-topic replies to correct thread
+- [telegram] Restore raw chat_id in logs, add thread_id to tracing
+- [providers] Increase model probe timeout for local LLM servers
+- [providers] Address PR review feedback
+
 ## [20260328.02] - 2026-03-28
 ### Added
 - [telegram] Isolate forum-topic sessions by thread_id
