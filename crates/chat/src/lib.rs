@@ -5240,7 +5240,8 @@ impl ChannelStreamDispatcher {
             let reply_to = target.message_id.clone();
             let key_for_insert = key.clone();
             let account_for_log = account_id.clone();
-            let chat_for_log = to.clone();
+            let chat_for_log = target.chat_id.clone();
+            let thread_for_log = target.thread_id.clone();
 
             self.workers.push(ChannelStreamWorker { sender: tx });
             self.tasks.push(tokio::spawn(async move {
@@ -5255,6 +5256,7 @@ impl ChannelStreamDispatcher {
                         warn!(
                             account_id = account_for_log,
                             chat_id = chat_for_log,
+                            thread_id = thread_for_log.as_deref().unwrap_or("-"),
                             "channel stream outbound failed: {e}"
                         );
                     },
@@ -7565,6 +7567,7 @@ async fn send_channel_logbook_follow_up_to_targets(
                 warn!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "failed to send logbook follow-up: {e}"
                 );
             }
@@ -7632,6 +7635,7 @@ async fn send_retry_status_to_channels(
                 warn!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "failed to send retry status to channel: {e}"
                 );
             }
@@ -7687,6 +7691,7 @@ async fn deliver_channel_error(state: &Arc<dyn ChatRuntime>, session_key: &str, 
                 warn!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "failed to send channel error reply: {e}"
                 );
             }
@@ -7745,6 +7750,7 @@ async fn deliver_channel_replies_to_targets(
                                 warn!(
                                     account_id = target.account_id,
                                     chat_id = target.chat_id,
+                                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                     "failed to send channel voice reply: {e}"
                                 );
                             }
@@ -7757,6 +7763,7 @@ async fn deliver_channel_replies_to_targets(
                                 warn!(
                                     account_id = target.account_id,
                                     chat_id = target.chat_id,
+                                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                     "failed to send logbook follow-up: {e}"
                                 );
                             }
@@ -7772,6 +7779,7 @@ async fn deliver_channel_replies_to_targets(
                                 warn!(
                                     account_id = target.account_id,
                                     chat_id = target.chat_id,
+                                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                     "failed to send channel voice reply: {e}"
                                 );
                             }
@@ -7784,6 +7792,7 @@ async fn deliver_channel_replies_to_targets(
                                 warn!(
                                     account_id = target.account_id,
                                     chat_id = target.chat_id,
+                                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                     "failed to send logbook follow-up: {e}"
                                 );
                             }
@@ -7797,6 +7806,7 @@ async fn deliver_channel_replies_to_targets(
                                 warn!(
                                     account_id = target.account_id,
                                     chat_id = target.chat_id,
+                                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                     "failed to send channel voice reply: {e}"
                                 );
                             }
@@ -7819,6 +7829,7 @@ async fn deliver_channel_replies_to_targets(
                                 warn!(
                                     account_id = target.account_id,
                                     chat_id = target.chat_id,
+                                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                     "failed to send transcript follow-up: {e}"
                                 );
                             }
@@ -7835,6 +7846,7 @@ async fn deliver_channel_replies_to_targets(
                             warn!(
                                 account_id = target.account_id,
                                 chat_id = target.chat_id,
+                                thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                 "failed to send logbook follow-up: {e}"
                             );
                         }
@@ -7859,6 +7871,7 @@ async fn deliver_channel_replies_to_targets(
                             warn!(
                                 account_id = target.account_id,
                                 chat_id = target.chat_id,
+                                thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                 "failed to send channel reply: {e}"
                             );
                         }
@@ -7873,6 +7886,7 @@ async fn deliver_channel_replies_to_targets(
                             warn!(
                                 account_id = target.account_id,
                                 chat_id = target.chat_id,
+                                thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                 "failed to send channel voice reply: {e}"
                             );
                         }
@@ -7888,6 +7902,7 @@ async fn deliver_channel_replies_to_targets(
                             warn!(
                                 account_id = target.account_id,
                                 chat_id = target.chat_id,
+                                thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                 "failed to send logbook follow-up: {e}"
                             );
                         }
@@ -7912,6 +7927,7 @@ async fn deliver_channel_replies_to_targets(
                             warn!(
                                 account_id = target.account_id,
                                 chat_id = target.chat_id,
+                                thread_id = target.thread_id.as_deref().unwrap_or("-"),
                                 "failed to send channel reply: {e}"
                             );
                         }
@@ -8320,6 +8336,7 @@ async fn send_screenshot_to_channels(
                     warn!(
                         account_id = target.account_id,
                         chat_id = target.chat_id,
+                        thread_id = target.thread_id.as_deref().unwrap_or("-"),
                         "failed to send screenshot to channel: {e}"
                     );
                     // Notify the user of the error
@@ -8331,6 +8348,7 @@ async fn send_screenshot_to_channels(
                     debug!(
                         account_id = target.account_id,
                         chat_id = target.chat_id,
+                        thread_id = target.thread_id.as_deref().unwrap_or("-"),
                         "sent screenshot to channel"
                     );
                 }
@@ -8376,6 +8394,7 @@ async fn dispatch_document_to_channels(
                 warn!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "failed to send document to channel: {e}"
                 );
                 let error_msg = format!("\u{26a0}\u{fe0f} Failed to send document: {e}");
@@ -8386,6 +8405,7 @@ async fn dispatch_document_to_channels(
                 debug!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "sent document to channel"
                 );
             }
@@ -8521,12 +8541,14 @@ async fn send_location_to_channels(
                 warn!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "failed to send location to channel: {e}"
                 );
             } else {
                 debug!(
                     account_id = target.account_id,
                     chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
                     "sent location pin to channel"
                 );
             }
