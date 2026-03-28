@@ -11,10 +11,7 @@ use teloxide::types::{ChatId, MessageId, ThreadId};
 pub(crate) fn parse_chat_target(to: &str) -> Result<(ChatId, Option<ThreadId>), ParseIntError> {
     if let Some((chat_part, thread_part)) = to.split_once(':') {
         let chat_id = ChatId(chat_part.parse::<i64>()?);
-        let thread_id = thread_part
-            .parse::<i32>()
-            .ok()
-            .map(|id| ThreadId(MessageId(id)));
+        let thread_id = Some(ThreadId(MessageId(thread_part.parse::<i32>()?)));
         Ok((chat_id, thread_id))
     } else {
         Ok((ChatId(to.parse::<i64>()?), None))
@@ -49,5 +46,10 @@ mod tests {
     #[test]
     fn parse_invalid_chat_id_is_err() {
         assert!(parse_chat_target("not_a_number").is_err());
+    }
+
+    #[test]
+    fn parse_invalid_thread_id_is_err() {
+        assert!(parse_chat_target("-100999:not_a_number").is_err());
     }
 }
