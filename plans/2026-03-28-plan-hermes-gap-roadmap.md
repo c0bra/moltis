@@ -1,9 +1,23 @@
 # Plan: Moltis Roadmap from Hermes Gap Analysis
 
-**Status:** Proposed
+**Status:** In Progress
 **Priority:** High
 **Date:** 2026-03-28
 **Scope:** Turn the Hermes comparison into a concrete Moltis roadmap, focused on product positioning, persistent-agent workflows, and the few capability gaps that meaningfully affect user adoption.
+
+## Implementation Update
+
+Work landed on 2026-03-28:
+
+- Phase 0: roadmap and gap analysis committed
+- Phase 1: `sessions_search` shipped for cross-session recall
+- Phase 2: automatic checkpoints shipped for built-in skill and memory mutations
+- Phase 3: README and docs repositioned Moltis as a secure persistent personal agent server
+
+Work still planned:
+
+- Phase 4: remote execution and reach
+- Phase 5: ecosystem, context-file hardening, optional identity modeling
 
 ## Background
 
