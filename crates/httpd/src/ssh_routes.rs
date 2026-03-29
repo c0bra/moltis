@@ -426,7 +426,7 @@ pub async fn ssh_test_target(
     let result = exec_resolved_ssh_target(
         store,
         &target,
-        &format!("printf {probe}"),
+        &format!("printf '%s' {probe}"),
         10,
         None,
         None,
@@ -656,7 +656,7 @@ pub async fn ssh_doctor_test_active(
     let result = exec_resolved_ssh_target(
         store,
         &route,
-        &format!("printf {probe}"),
+        &format!("printf '%s' {probe}"),
         10,
         None,
         None,

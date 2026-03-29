@@ -829,19 +829,26 @@ impl CredentialStore {
     }
 
     pub async fn delete_ssh_key(&self, id: i64) -> anyhow::Result<()> {
-        let in_use: Option<(i64,)> =
-            sqlx::query_as("SELECT COUNT(1) FROM ssh_targets WHERE key_id = ?")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-        if in_use.is_some_and(|(count,)| count > 0) {
-            anyhow::bail!("ssh key is still assigned to one or more targets");
-        }
+        let deleted = sqlx::query(
+            "DELETE FROM ssh_keys
+             WHERE id = ?
+               AND NOT EXISTS (SELECT 1 FROM ssh_targets WHERE key_id = ?)",
+        )
+        .bind(id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
 
-        sqlx::query("DELETE FROM ssh_keys WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        if deleted.rows_affected() == 0 {
+            let in_use: Option<(i64,)> =
+                sqlx::query_as("SELECT COUNT(1) FROM ssh_targets WHERE key_id = ?")
+                    .bind(id)
+                    .fetch_optional(&self.pool)
+                    .await?;
+            if in_use.is_some_and(|(count,)| count > 0) {
+                anyhow::bail!("ssh key is still assigned to one or more targets");
+            }
+        }
         Ok(())
     }
 
@@ -1917,6 +1924,41 @@ mod tests {
 
         let default_after_delete = store.get_default_ssh_target().await.unwrap().unwrap();
         assert_eq!(default_after_delete.id, second_target_id);
+    }
+
+    #[tokio::test]
+    async fn test_delete_ssh_key_rejects_in_use_key() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let store = CredentialStore::new(pool).await.unwrap();
+
+        let key_id = store
+            .create_ssh_key(
+                "prod-key",
+                "PRIVATE KEY",
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMoltis test@example",
+                "256 SHA256:test moltis:test (ED25519)",
+            )
+            .await
+            .unwrap();
+        store
+            .create_ssh_target(
+                "prod-box",
+                "deploy@example.com",
+                None,
+                None,
+                SshAuthMode::Managed,
+                Some(key_id),
+                true,
+            )
+            .await
+            .unwrap();
+
+        let error = store.delete_ssh_key(key_id).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("ssh key is still assigned to one or more targets")
+        );
     }
 
     #[tokio::test]
