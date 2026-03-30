@@ -131,7 +131,10 @@ test.describe("Authentication", () => {
 
 		await page.goto("/chats/main");
 		await expectPageContentMounted(page);
-		await expect(page.getByText("Main chat", { exact: true })).toBeVisible();
+		// Verify session is visible in the sidebar (not hidden by vault-sealed state).
+		// Use the sidebar item selector because getByText("Main chat") also matches
+		// hidden modal mounts for the session header.
+		await expect(page.locator('.session-item[data-session-key="main"]')).toBeVisible();
 		await expect(page.getByText("Vault is sealed", { exact: true })).toHaveCount(0);
 		expect(pageErrors).toEqual([]);
 	});
