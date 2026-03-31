@@ -9,19 +9,46 @@ import { sendRpc } from "./helpers.js";
  * @param {string} type - channel type
  * @param {string} accountId - account identifier
  * @param {string} credential - primary credential (token or app password)
+ * @param {{ matrixAuthMode?: string, matrixUserId?: string }} [options]
  * @returns {{ valid: true } | { valid: false, error: string }}
  */
-export function validateChannelFields(type, accountId, credential) {
+export function validateChannelFields(type, accountId, credential, options = {}) {
 	if (!accountId.trim()) {
 		return { valid: false, error: "Account ID is required." };
 	}
 	if (!credential.trim()) {
+		if (type === "matrix") {
+			return { valid: false, error: matrixCredentialError(options.matrixAuthMode) };
+		}
 		return {
 			valid: false,
 			error: type === "msteams" ? "App password is required." : "Bot token is required.",
 		};
 	}
+	if (
+		type === "matrix" &&
+		normalizeMatrixAuthMode(options.matrixAuthMode) === "password" &&
+		!String(options.matrixUserId || "").trim()
+	) {
+		return { valid: false, error: "Matrix user ID is required for password login." };
+	}
 	return { valid: true };
+}
+
+export function normalizeMatrixAuthMode(authMode) {
+	return authMode === "password" ? "password" : "access_token";
+}
+
+export function matrixCredentialLabel(authMode) {
+	return normalizeMatrixAuthMode(authMode) === "password" ? "Password" : "Access Token";
+}
+
+export function matrixCredentialPlaceholder(authMode) {
+	return normalizeMatrixAuthMode(authMode) === "password" ? "Account password" : "syt_...";
+}
+
+export function matrixCredentialError(authMode) {
+	return normalizeMatrixAuthMode(authMode) === "password" ? "Password is required." : "Access token is required.";
 }
 
 /**

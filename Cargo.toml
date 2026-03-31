@@ -187,6 +187,7 @@ async-graphql-axum = "7"
 gix                = "0.78"
 hmac               = "0.12"
 llama-cpp-2        = "0.1"
+matrix-sdk         = { default-features = false, features = ["markdown", "native-tls"], version = "0.16" }
 mockito            = "1.7"
 open               = "5.3"
 rand               = "0.9"

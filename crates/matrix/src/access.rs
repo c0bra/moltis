@@ -1,5 +1,5 @@
 use {
-    moltis_channels::gating::{self, DmPolicy, GroupPolicy},
+    moltis_channels::gating::{self, DmPolicy, GroupPolicy, MentionMode},
     moltis_common::types::ChatType,
 };
 
@@ -11,10 +11,11 @@ pub fn check_access(
     chat_type: &ChatType,
     sender_id: &str,
     room_id: &str,
+    bot_mentioned: bool,
 ) -> Result<(), AccessDenied> {
     match chat_type {
         ChatType::Dm => check_dm_access(config, sender_id),
-        ChatType::Group | ChatType::Channel => check_room_access(config, room_id),
+        ChatType::Group | ChatType::Channel => check_room_access(config, room_id, bot_mentioned),
     }
 }
 
@@ -35,7 +36,11 @@ fn check_dm_access(config: &MatrixAccountConfig, sender_id: &str) -> Result<(), 
     }
 }
 
-fn check_room_access(config: &MatrixAccountConfig, room_id: &str) -> Result<(), AccessDenied> {
+fn check_room_access(
+    config: &MatrixAccountConfig,
+    room_id: &str,
+    bot_mentioned: bool,
+) -> Result<(), AccessDenied> {
     match config.room_policy {
         GroupPolicy::Disabled => Err(AccessDenied::RoomsDisabled),
         GroupPolicy::Open => Ok(()),
@@ -48,6 +53,18 @@ fn check_room_access(config: &MatrixAccountConfig, room_id: &str) -> Result<(), 
                 Ok(())
             }
         },
+    }?;
+
+    match config.mention_mode {
+        MentionMode::Always => Ok(()),
+        MentionMode::None => Err(AccessDenied::MentionModeNone),
+        MentionMode::Mention => {
+            if bot_mentioned {
+                Ok(())
+            } else {
+                Err(AccessDenied::NotMentioned)
+            }
+        },
     }
 }
 
@@ -57,6 +74,8 @@ pub enum AccessDenied {
     NotOnAllowlist,
     RoomsDisabled,
     RoomNotOnAllowlist,
+    MentionModeNone,
+    NotMentioned,
 }
 
 impl std::fmt::Display for AccessDenied {
@@ -66,6 +85,8 @@ impl std::fmt::Display for AccessDenied {
             Self::NotOnAllowlist => write!(f, "user not on allowlist"),
             Self::RoomsDisabled => write!(f, "rooms are disabled"),
             Self::RoomNotOnAllowlist => write!(f, "room not on allowlist"),
+            Self::MentionModeNone => write!(f, "bot does not respond in rooms"),
+            Self::NotMentioned => write!(f, "bot was not mentioned"),
         }
     }
 }
@@ -82,7 +103,7 @@ mod tests {
     fn open_dm_allows_all() {
         let mut c = cfg();
         c.dm_policy = DmPolicy::Open;
-        assert!(check_access(&c, &ChatType::Dm, "@anyone:example.com", "").is_ok());
+        assert!(check_access(&c, &ChatType::Dm, "@anyone:example.com", "", false).is_ok());
     }
 
     #[test]
@@ -90,7 +111,7 @@ mod tests {
         let mut c = cfg();
         c.dm_policy = DmPolicy::Disabled;
         assert_eq!(
-            check_access(&c, &ChatType::Dm, "@user:example.com", ""),
+            check_access(&c, &ChatType::Dm, "@user:example.com", "", false),
             Err(AccessDenied::DmsDisabled)
         );
     }
@@ -100,9 +121,9 @@ mod tests {
         let mut c = cfg();
         c.dm_policy = DmPolicy::Allowlist;
         c.user_allowlist = vec!["@alice:example.com".into()];
-        assert!(check_access(&c, &ChatType::Dm, "@alice:example.com", "").is_ok());
+        assert!(check_access(&c, &ChatType::Dm, "@alice:example.com", "", false).is_ok());
         assert_eq!(
-            check_access(&c, &ChatType::Dm, "@bob:example.com", ""),
+            check_access(&c, &ChatType::Dm, "@bob:example.com", "", false),
             Err(AccessDenied::NotOnAllowlist)
         );
     }
@@ -117,7 +138,8 @@ mod tests {
                 &c,
                 &ChatType::Group,
                 "@user:example.com",
-                "!room1:example.com"
+                "!room1:example.com",
+                true
             )
             .is_ok()
         );
@@ -126,9 +148,73 @@ mod tests {
                 &c,
                 &ChatType::Group,
                 "@user:example.com",
-                "!room2:example.com"
+                "!room2:example.com",
+                true
             ),
             Err(AccessDenied::RoomNotOnAllowlist)
+        );
+    }
+
+    #[test]
+    fn room_requires_mention_by_default() {
+        let mut c = cfg();
+        c.room_policy = GroupPolicy::Open;
+
+        assert_eq!(
+            check_access(
+                &c,
+                &ChatType::Group,
+                "@user:example.com",
+                "!room:example.com",
+                false
+            ),
+            Err(AccessDenied::NotMentioned)
+        );
+        assert!(
+            check_access(
+                &c,
+                &ChatType::Group,
+                "@user:example.com",
+                "!room:example.com",
+                true
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn room_none_mode_rejects_even_if_mentioned() {
+        let mut c = cfg();
+        c.room_policy = GroupPolicy::Open;
+        c.mention_mode = MentionMode::None;
+
+        assert_eq!(
+            check_access(
+                &c,
+                &ChatType::Group,
+                "@user:example.com",
+                "!room:example.com",
+                true
+            ),
+            Err(AccessDenied::MentionModeNone)
+        );
+    }
+
+    #[test]
+    fn room_always_mode_accepts_without_mention() {
+        let mut c = cfg();
+        c.room_policy = GroupPolicy::Open;
+        c.mention_mode = MentionMode::Always;
+
+        assert!(
+            check_access(
+                &c,
+                &ChatType::Group,
+                "@user:example.com",
+                "!room:example.com",
+                false
+            )
+            .is_ok()
         );
     }
 }

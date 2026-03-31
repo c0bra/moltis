@@ -10,6 +10,7 @@ capabilities that control what features are available.
 |---------|-------------|--------------------|--------------------|
 | Telegram | Polling | No | Streaming, voice ingest, reactions, OTP, location |
 | Discord | Gateway (WebSocket) | No | Streaming, interactive messages, threads, reactions |
+| Matrix | Gateway (sync loop) | No | Streaming, voice ingest, interactive polls, threads, reactions, OTP, location |
 | Microsoft Teams | Webhook | Yes | Streaming, interactive messages, threads |
 | WhatsApp | Gateway (WebSocket) | No | Streaming, voice ingest, OTP, pairing, location |
 | Slack | Socket Mode | No | Streaming, interactive messages, threads, reactions |
@@ -24,8 +25,8 @@ or open port is needed. Used by Telegram.
 ### Gateway / WebSocket
 
 The bot opens a persistent outbound WebSocket connection to the platform and
-receives events in real time. No public URL needed. Used by Discord and
-WhatsApp.
+receives events in real time, or uses a persistent sync loop over outbound HTTP.
+No public URL needed. Used by Discord, Matrix, and WhatsApp.
 
 ### Socket Mode
 
@@ -79,13 +80,18 @@ token = "..."
 bot_token = "xoxb-..."
 app_token = "xapp-..."
 
+[channels.matrix.my_matrix_bot]
+homeserver = "https://matrix.example.com"
+access_token = "syt_..."
+user_id = "@bot:example.com"
+
 [channels.whatsapp.my_wa]
 dm_policy = "open"
 ```
 
 For detailed configuration, see the per-channel pages:
 [Telegram](telegram.md), [Discord](discord.md), [Slack](slack.md),
-[WhatsApp](whatsapp.md).
+[Matrix](matrix.md), [WhatsApp](whatsapp.md).
 
 You can also use the web UI's **Channels** tab for guided setup with each platform.
 
@@ -143,7 +149,8 @@ Controls who can interact with the bot in group chats / channels / guilds.
 | `"disabled"` | Group messages are silently ignored |
 
 The group allowlist field name varies by channel: `group_allowlist` (Telegram,
-WhatsApp, MS Teams), `guild_allowlist` (Discord), `channel_allowlist` (Slack).
+WhatsApp, MS Teams), `guild_allowlist` (Discord), `channel_allowlist` (Slack),
+`room_allowlist` (Matrix).
 
 ### Mention Mode
 
@@ -166,7 +173,7 @@ All allowlist fields across all channels share the same matching behavior:
 
 ### OTP Self-Approval
 
-Channels that support OTP (Telegram, Discord, WhatsApp) allow non-allowlisted
+Channels that support OTP (Telegram, Discord, Matrix, WhatsApp) allow non-allowlisted
 users to self-approve by entering a 6-digit code. The code appears in the web UI
 under **Channels > Senders**. See each channel's page for details.
 

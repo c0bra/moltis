@@ -13,6 +13,9 @@ import {
 	defaultTeamsBaseUrl,
 	fetchChannelStatus,
 	generateWebhookSecretHex,
+	matrixCredentialLabel,
+	matrixCredentialPlaceholder,
+	normalizeMatrixAuthMode,
 	validateChannelFields,
 } from "./channel-utils.js";
 import { EmojiPicker } from "./emoji-picker.js";
@@ -2244,6 +2247,13 @@ function ChannelTypeSelector({ onSelect, offered }) {
 			<span class="text-sm font-medium text-[var(--text-strong)]">Discord</span>
 		</button>`
 		}
+		${
+			offered.has("matrix") &&
+			html`<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("matrix")}>
+			<span class="icon icon-xl icon-matrix"></span>
+			<span class="text-sm font-medium text-[var(--text-strong)]">Matrix</span>
+		</button>`
+		}
 	</div>`;
 }
 
@@ -2557,6 +2567,174 @@ function DiscordForm({ onConnected, error, setError }) {
 	</form>`;
 }
 
+function MatrixForm({ onConnected, error, setError }) {
+	var [accountId, setAccountId] = useState("");
+	var [homeserver, setHomeserver] = useState("");
+	var [authMode, setAuthMode] = useState("access_token");
+	var [userId, setUserId] = useState("");
+	var [credential, setCredential] = useState("");
+	var [deviceDisplayName, setDeviceDisplayName] = useState("");
+	var [dmPolicy, setDmPolicy] = useState("allowlist");
+	var [roomPolicy, setRoomPolicy] = useState("allowlist");
+	var [mentionMode, setMentionMode] = useState("mention");
+	var [autoJoin, setAutoJoin] = useState("always");
+	var [userAllowlist, setUserAllowlist] = useState("");
+	var [roomAllowlist, setRoomAllowlist] = useState("");
+	var [saving, setSaving] = useState(false);
+
+	function splitLines(value) {
+		return value
+			.trim()
+			.split(/\n/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+
+	function onSubmit(e) {
+		e.preventDefault();
+		var v = validateChannelFields("matrix", accountId, credential, {
+			matrixAuthMode: authMode,
+			matrixUserId: userId,
+		});
+		if (!v.valid) {
+			setError(v.error);
+			return;
+		}
+		if (!homeserver.trim()) {
+			setError("Homeserver URL is required.");
+			return;
+		}
+		setError(null);
+		setSaving(true);
+		var config = {
+			homeserver: homeserver.trim(),
+			dm_policy: dmPolicy,
+			room_policy: roomPolicy,
+			mention_mode: mentionMode,
+			auto_join: autoJoin,
+			user_allowlist: splitLines(userAllowlist),
+			room_allowlist: splitLines(roomAllowlist),
+		};
+		if (normalizeMatrixAuthMode(authMode) === "password") {
+			config.password = credential.trim();
+		} else {
+			config.access_token = credential.trim();
+		}
+		if (userId.trim()) config.user_id = userId.trim();
+		if (deviceDisplayName.trim()) config.device_display_name = deviceDisplayName.trim();
+		addChannel("matrix", accountId.trim(), config).then((res) => {
+			setSaving(false);
+			if (res?.ok) {
+				onConnected(accountId.trim(), "matrix");
+			} else {
+				setError((res?.error && (res.error.message || res.error.detail)) || "Failed to connect Matrix.");
+			}
+		});
+	}
+
+	return html`<form onSubmit=${onSubmit} class="flex flex-col gap-3">
+		<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-1">
+			<span class="font-medium text-[var(--text-strong)]">Connect a Matrix bot user</span>
+			<span>1. Choose any local account ID below for Moltis</span>
+			<span>2. Use either an access token or password login, Matrix user ID is only required for password auth</span>
+			<span>3. Choose invite auto-join behavior, then allowlist the DMs and rooms Moltis should answer in</span>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Account ID</label>
+			<input type="text" class="provider-key-input w-full"
+				value=${accountId} onInput=${(e) => setAccountId(e.target.value)}
+				placeholder="e.g. my-matrix-bot"
+				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+				name="matrix_account_id" autofocus />
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Homeserver URL</label>
+			<input type="text" class="provider-key-input w-full"
+				value=${homeserver} onInput=${(e) => setHomeserver(e.target.value)}
+				placeholder="https://matrix.example.com"
+				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+				name="matrix_homeserver" />
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Authentication</label>
+			<select class="provider-key-input w-full cursor-pointer" value=${authMode} onChange=${(e) => setAuthMode(normalizeMatrixAuthMode(e.target.value))}>
+				<option value="access_token">Access token</option>
+				<option value="password">Password</option>
+			</select>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Matrix User ID${authMode === "password" ? " (required)" : " (optional)"}</label>
+			<input type="text" class="provider-key-input w-full"
+				value=${userId} onInput=${(e) => setUserId(e.target.value)}
+				placeholder="@bot:example.com"
+				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+				name="matrix_user_id" />
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">${matrixCredentialLabel(authMode)}</label>
+			<input type="password" class="provider-key-input w-full"
+				value=${credential} onInput=${(e) => setCredential(e.target.value)}
+				placeholder=${matrixCredentialPlaceholder(authMode)}
+				autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false"
+				name="matrix_credential" />
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Device Display Name (optional)</label>
+			<input type="text" class="provider-key-input w-full"
+				value=${deviceDisplayName} onInput=${(e) => setDeviceDisplayName(e.target.value)}
+				placeholder="Moltis Matrix Bot"
+				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+				name="matrix_device_display_name" />
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">DM Policy</label>
+			<select class="provider-key-input w-full cursor-pointer" value=${dmPolicy} onChange=${(e) => setDmPolicy(e.target.value)}>
+				<option value="allowlist">Allowlist only (recommended)</option>
+				<option value="open">Open (anyone)</option>
+				<option value="disabled">Disabled</option>
+			</select>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Room Policy</label>
+			<select class="provider-key-input w-full cursor-pointer" value=${roomPolicy} onChange=${(e) => setRoomPolicy(e.target.value)}>
+				<option value="allowlist">Room allowlist only (recommended)</option>
+				<option value="open">Open (any joined room)</option>
+				<option value="disabled">Disabled</option>
+			</select>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Room Mention Mode</label>
+			<select class="provider-key-input w-full cursor-pointer" value=${mentionMode} onChange=${(e) => setMentionMode(e.target.value)}>
+				<option value="mention">Must mention bot</option>
+				<option value="always">Always respond</option>
+				<option value="none">Never respond in rooms</option>
+			</select>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Invite Auto-Join</label>
+			<select class="provider-key-input w-full cursor-pointer" value=${autoJoin} onChange=${(e) => setAutoJoin(e.target.value)}>
+				<option value="always">Always join invites</option>
+				<option value="allowlist">Only when inviter or room is allowlisted</option>
+				<option value="off">Do not auto-join</option>
+			</select>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">DM Allowlist (Matrix user IDs)</label>
+			<textarea class="provider-key-input w-full" rows="2"
+				value=${userAllowlist} onInput=${(e) => setUserAllowlist(e.target.value)}
+				placeholder="@alice:example.com" style="resize:vertical;font-family:var(--font-body);" />
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Room Allowlist (room IDs or aliases)</label>
+			<textarea class="provider-key-input w-full" rows="2"
+				value=${roomAllowlist} onInput=${(e) => setRoomAllowlist(e.target.value)}
+				placeholder="!room:example.com" style="resize:vertical;font-family:var(--font-body);" />
+		</div>
+		${error && html`<${ErrorPanel} message=${error} />`}
+		<button type="submit" class="provider-btn" disabled=${saving}>${saving ? "Connecting\u2026" : "Connect Matrix"}</button>
+	</form>`;
+}
+
 function WhatsAppForm({ onConnected, error, setError }) {
 	var [accountId, setAccountId] = useState("");
 	var [dmPolicy, setDmPolicy] = useState("allowlist");
@@ -2703,7 +2881,9 @@ function WhatsAppForm({ onConnected, error, setError }) {
 function channelDisplayLabel(type) {
 	if (type === "msteams") return "Microsoft Teams";
 	if (type === "discord") return "Discord";
+	if (type === "slack") return "Slack";
 	if (type === "whatsapp") return "WhatsApp";
+	if (type === "matrix") return "Matrix";
 	return "Telegram";
 }
 
@@ -2731,7 +2911,7 @@ function ChannelSuccess({ channelName, channelType: type, onAnother }) {
 }
 
 function ChannelStep({ onNext, onBack }) {
-	var offeredList = getGon("channels_offered") || ["telegram"];
+	var offeredList = getGon("channels_offered") || ["telegram", "discord", "slack", "matrix"];
 	var offered = new Set(offeredList);
 	var singleType = offeredList.length === 1 ? offeredList[0] : null;
 
@@ -2775,6 +2955,7 @@ function ChannelStep({ onNext, onBack }) {
 		${phase === "form" && selectedType === "whatsapp" && html`<${WhatsAppForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
 		${phase === "form" && selectedType === "msteams" && html`<${TeamsForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
 		${phase === "form" && selectedType === "discord" && html`<${DiscordForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
+		${phase === "form" && selectedType === "matrix" && html`<${MatrixForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
 		${phase === "success" && html`<${ChannelSuccess} channelName=${connectedName} channelType=${connectedType} onAnother=${onAnother} />`}
 		<div class="flex flex-wrap items-center gap-3 mt-1">
 			<button type="button" class="provider-btn provider-btn-secondary" onClick=${showBackSelector ? () => setPhase("select") : onBack}>${t("common:actions.back")}</button>

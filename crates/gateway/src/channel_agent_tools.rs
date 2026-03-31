@@ -30,7 +30,7 @@ impl AgentTool for SendMessageTool {
     }
 
     fn description(&self) -> &str {
-        "Send a proactive message to any configured channel account/chat (Telegram, Discord, Teams, WhatsApp). Use this for alerts, reminders, and scheduled outreach."
+        "Send a proactive message to any configured channel account/chat (Telegram, Discord, Slack, Matrix, Teams, WhatsApp). Use this for alerts, reminders, and scheduled outreach."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -52,7 +52,7 @@ impl AgentTool for SendMessageTool {
                 },
                 "type": {
                     "type": "string",
-                    "enum": ["telegram", "discord", "msteams", "whatsapp"],
+                    "enum": ["telegram", "discord", "slack", "matrix", "msteams", "whatsapp"],
                     "description": "Optional channel type hint when account ids may overlap across channel types."
                 },
                 "reply_to": {
@@ -218,5 +218,17 @@ mod tests {
             .await
             .expect_err("expected validation error");
         assert!(err.to_string().contains("missing"));
+    }
+
+    #[tokio::test]
+    async fn send_message_tool_schema_lists_matrix_and_slack() {
+        let tool = SendMessageTool::new(Arc::new(RecordingChannelService::new()));
+        let schema = tool.parameters_schema();
+        let channel_types = schema["properties"]["type"]["enum"]
+            .as_array()
+            .expect("channel type enum");
+
+        assert!(channel_types.iter().any(|value| value == "slack"));
+        assert!(channel_types.iter().any(|value| value == "matrix"));
     }
 }

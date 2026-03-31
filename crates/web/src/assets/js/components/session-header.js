@@ -65,6 +65,12 @@ export function SessionHeader({
 } = {}) {
 	var session = sessionStore.activeSession.value;
 	var currentKey = sessionStore.activeSessionKey.value;
+	var isChannelSessionKey =
+		currentKey.startsWith("telegram:") ||
+		currentKey.startsWith("msteams:") ||
+		currentKey.startsWith("discord:") ||
+		currentKey.startsWith("slack:") ||
+		currentKey.startsWith("matrix:");
 	var gonAgentsPayload = parseAgentsListPayload(gon.get("agents"));
 	var initialAgentOptions = Array.isArray(gonAgentsPayload?.agents) ? gonAgentsPayload.agents : [];
 	var initialDefaultAgentId = typeof gonAgentsPayload?.defaultId === "string" ? gonAgentsPayload.defaultId : "main";
@@ -86,7 +92,7 @@ export function SessionHeader({
 	var activeRunId = session?.activeRunId.value || null;
 
 	var isMain = currentKey === "main";
-	var isChannel = session?.channelBinding || currentKey.startsWith("telegram:") || currentKey.startsWith("msteams:");
+	var isChannel = session?.channelBinding || isChannelSessionKey;
 	var isCron = currentKey.startsWith("cron:");
 	var canRename = !(isMain || isChannel || isCron);
 	var canStop = !isCron && replying;

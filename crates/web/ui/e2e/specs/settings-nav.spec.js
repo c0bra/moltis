@@ -309,6 +309,148 @@ test.describe("Settings navigation", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
+	test("channels add matrix allows omitting the user id", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await navigateAndWait(page, "/settings/channels");
+		await waitForWsConnected(page);
+
+		const addButton = page.getByRole("button", { name: "Connect Matrix", exact: true });
+		await expect(addButton).toBeVisible();
+		await addButton.click();
+
+		await expect(page.getByRole("heading", { name: "Connect Matrix", exact: true })).toBeVisible();
+		const accountInput = page.locator('input[data-field="accountId"]');
+		await expect(accountInput).toBeVisible();
+
+		await page.evaluate(async () => {
+			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
+			if (!appScript) throw new Error("app.js script not found");
+			const appUrl = new URL(appScript.src, window.location.origin).href;
+			const marker = "js/app.js";
+			const markerIdx = appUrl.indexOf(marker);
+			if (markerIdx < 0) throw new Error("app.js marker not found in script URL");
+			const prefix = appUrl.slice(0, markerIdx);
+			const state = await import(`${prefix}js/state.js`);
+			const wsOpen = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
+			window.__matrixSettingsAddConfig = null;
+			state.setConnected(true);
+			state.setWs({
+				readyState: wsOpen,
+				send(raw) {
+					const req = JSON.parse(raw || "{}");
+					const resolver = state.pending[req.id];
+					if (!resolver) return;
+					if (req.method === "channels.add") {
+						window.__matrixSettingsAddConfig = req.params?.config || null;
+						resolver({ ok: true, payload: {} });
+					} else if (req.method === "channels.status") {
+						resolver({ ok: true, payload: { channels: [] } });
+					} else {
+						resolver({ ok: false, error: { message: `unexpected rpc in matrix settings test: ${req.method}` } });
+					}
+					delete state.pending[req.id];
+				},
+			});
+		});
+
+		await accountInput.fill("e2e-matrix");
+		await page.locator('input[data-field="homeserver"]').fill("https://matrix.example.com");
+		await page.locator('input[data-field="credential"]').fill("syt_test_token");
+		await page.evaluate(() => {
+			const submitButton = Array.from(document.querySelectorAll(".modal-box button.provider-btn")).find(
+				(button) => button.textContent?.trim() === "Connect Matrix",
+			);
+			if (!(submitButton instanceof HTMLButtonElement)) {
+				throw new Error("visible Matrix submit button not found");
+			}
+			submitButton.scrollIntoView({ block: "nearest" });
+			submitButton.click();
+		});
+
+		await expect.poll(() => page.evaluate(() => window.__matrixSettingsAddConfig)).not.toBeNull();
+
+		const sentConfig = await page.evaluate(() => window.__matrixSettingsAddConfig);
+		expect(sentConfig).toMatchObject({
+			homeserver: "https://matrix.example.com",
+			access_token: "syt_test_token",
+			auto_join: "always",
+		});
+		expect(sentConfig).not.toHaveProperty("user_id");
+		expect(pageErrors).toEqual([]);
+	});
+
+	test("channels add matrix supports password auth and invite policy", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await navigateAndWait(page, "/settings/channels");
+		await waitForWsConnected(page);
+
+		const addButton = page.getByRole("button", { name: "Connect Matrix", exact: true });
+		await expect(addButton).toBeVisible();
+		await addButton.click();
+
+		await expect(page.getByRole("heading", { name: "Connect Matrix", exact: true })).toBeVisible();
+
+		await page.evaluate(async () => {
+			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
+			if (!appScript) throw new Error("app.js script not found");
+			const appUrl = new URL(appScript.src, window.location.origin).href;
+			const marker = "js/app.js";
+			const markerIdx = appUrl.indexOf(marker);
+			if (markerIdx < 0) throw new Error("app.js marker not found in script URL");
+			const prefix = appUrl.slice(0, markerIdx);
+			const state = await import(`${prefix}js/state.js`);
+			const wsOpen = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
+			window.__matrixSettingsAddConfig = null;
+			state.setConnected(true);
+			state.setWs({
+				readyState: wsOpen,
+				send(raw) {
+					const req = JSON.parse(raw || "{}");
+					const resolver = state.pending[req.id];
+					if (!resolver) return;
+					if (req.method === "channels.add") {
+						window.__matrixSettingsAddConfig = req.params?.config || null;
+						resolver({ ok: true, payload: {} });
+					} else if (req.method === "channels.status") {
+						resolver({ ok: true, payload: { channels: [] } });
+					} else {
+						resolver({ ok: false, error: { message: `unexpected rpc in matrix settings test: ${req.method}` } });
+					}
+					delete state.pending[req.id];
+				},
+			});
+		});
+
+		await page.locator('input[data-field="accountId"]').fill("e2e-matrix-password");
+		await page.locator('input[data-field="homeserver"]').fill("https://matrix.example.com");
+		await page.locator('select[data-field="authMode"]').selectOption("password");
+		await page.locator('input[data-field="userId"]').fill("@bot:example.com");
+		await page.locator('input[data-field="credential"]').fill("correct horse battery staple");
+		await page.locator('select[data-field="autoJoin"]').selectOption("allowlist");
+		await page.evaluate(() => {
+			const submitButton = Array.from(document.querySelectorAll(".modal-box button.provider-btn")).find(
+				(button) => button.textContent?.trim() === "Connect Matrix",
+			);
+			if (!(submitButton instanceof HTMLButtonElement)) {
+				throw new Error("visible Matrix submit button not found");
+			}
+			submitButton.scrollIntoView({ block: "nearest" });
+			submitButton.click();
+		});
+
+		await expect.poll(() => page.evaluate(() => window.__matrixSettingsAddConfig)).not.toBeNull();
+
+		const sentConfig = await page.evaluate(() => window.__matrixSettingsAddConfig);
+		expect(sentConfig).toMatchObject({
+			homeserver: "https://matrix.example.com",
+			user_id: "@bot:example.com",
+			password: "correct horse battery staple",
+			auto_join: "allowlist",
+		});
+		expect(sentConfig).not.toHaveProperty("access_token");
+		expect(pageErrors).toEqual([]);
+	});
+
 	test("graphql toggle applies immediately", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await navigateAndWait(page, "/settings/identity");

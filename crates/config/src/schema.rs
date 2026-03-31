@@ -1327,14 +1327,16 @@ pub struct McpOAuthOverrideEntry {
 ///
 /// Kept in `moltis-config` (not `moltis-channels`) so the config crate stays
 /// independent of the channels crate while still validating channel names.
-pub const KNOWN_CHANNEL_TYPES: &[&str] = &["telegram", "whatsapp", "msteams", "discord", "slack"];
+pub const KNOWN_CHANNEL_TYPES: &[&str] = &[
+    "telegram", "whatsapp", "msteams", "discord", "slack", "matrix",
+];
 
 /// Channel configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChannelsConfig {
     /// Which channel types are offered in the web UI (onboarding + channels page).
-    /// Defaults to `["telegram", "discord", "slack"]`. Add `"msteams"` or `"whatsapp"` to opt in.
+    /// Defaults to `["telegram", "discord", "slack", "matrix"]`. Add `"msteams"` or `"whatsapp"` to opt in.
     #[serde(
         default = "default_channels_offered",
         skip_serializing_if = "Vec::is_empty"
@@ -1390,7 +1392,12 @@ impl ChannelsConfig {
 }
 
 fn default_channels_offered() -> Vec<String> {
-    vec!["telegram".into(), "discord".into(), "slack".into()]
+    vec![
+        "telegram".into(),
+        "discord".into(),
+        "slack".into(),
+        "matrix".into(),
+    ]
 }
 
 impl Default for ChannelsConfig {

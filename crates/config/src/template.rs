@@ -593,8 +593,8 @@ reset_on_exit = true              # Reset serve/funnel when gateway shuts down
 [channels]
 # Which channel types appear in the web UI's "+ Add Channel" menu.
 # Default: ["telegram", "discord", "slack"]
-# Add "whatsapp" or "msteams" to enable them in the UI.
-# offered = ["telegram", "discord", "slack", "whatsapp"]
+# Add "matrix", "whatsapp", or "msteams" to enable them in the UI.
+# offered = ["telegram", "discord", "slack", "matrix", "whatsapp"]
 
 # WhatsApp linked-device accounts
 # [channels.whatsapp.my-bot]
@@ -656,6 +656,30 @@ reset_on_exit = true              # Reset serve/funnel when gateway shuts down
 # stream_mode = "edit_in_place"   # "edit_in_place", "native", or "off"
 # edit_throttle_ms = 500          # Min ms between streaming edits
 # thread_replies = true           # Reply in threads
+
+# Matrix bots / appservices using access tokens or password login
+# [channels.matrix.my-bot]
+# homeserver = "https://matrix.example.com"
+# access_token = "syt_..."        # Access token for the bot account (preferred when set)
+# password = "..."                # Optional alternative to access_token
+# user_id = "@bot:example.com"    # Required for password login, auto-detected for token auth
+# device_id = "MOLTISBOT"         # Optional device ID for session restore
+# device_display_name = "Moltis Matrix Bot"  # Optional display name for password logins
+# dm_policy = "allowlist"         # "open", "allowlist", or "disabled"
+# room_policy = "allowlist"       # "open", "allowlist", or "disabled"
+# mention_mode = "mention"        # "mention", "always", or "none"
+# room_allowlist = []             # Matrix room IDs or aliases
+# user_allowlist = []             # Matrix user IDs
+# auto_join = "always"            # "always", "allowlist", or "off"
+# model = "gpt-4.1"
+# model_provider = "openai"
+# stream_mode = "edit_in_place"   # "edit_in_place" or "off"
+# edit_throttle_ms = 500          # Min ms between streaming edits
+# stream_min_initial_chars = 30   # Delay first streamed send until this many chars
+# reply_to_message = true         # Send threaded/rich replies when possible
+# ack_reaction = "👀"             # Emoji reaction while processing (omit to disable)
+# otp_self_approval = true        # OTP self-approval for non-allowlisted DM users
+# otp_cooldown_secs = 300         # Cooldown after 3 failed OTP attempts
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HOOKS

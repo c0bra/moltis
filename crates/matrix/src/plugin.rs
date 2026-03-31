@@ -5,24 +5,22 @@ use std::{
 
 use {
     async_trait::async_trait,
-    matrix_sdk::{Client, config::SyncSettings, ruma::OwnedUserId},
-    secrecy::ExposeSecret,
-    tracing::{info, warn},
+    tracing::{info, instrument, warn},
 };
 
 use moltis_channels::{
     ChannelConfigView, Error as ChannelError, Result as ChannelResult,
     message_log::MessageLog,
-    otp::OtpState,
+    otp::{OtpChallengeInfo, OtpState},
     plugin::{
-        ChannelEventSink, ChannelHealthSnapshot, ChannelOutbound, ChannelPlugin, ChannelStatus,
-        ChannelStreamOutbound, ChannelThreadContext,
+        ChannelEventSink, ChannelHealthSnapshot, ChannelOtpProvider, ChannelOutbound,
+        ChannelPlugin, ChannelStatus, ChannelStreamOutbound, ChannelThreadContext,
     },
 };
 
 use crate::{
+    client,
     config::{MatrixAccountConfig, RedactedConfig},
-    handler,
     outbound::MatrixOutbound,
     state::{AccountState, AccountStateMap},
 };
@@ -58,6 +56,18 @@ impl MatrixPlugin {
         self.event_sink = Some(sink);
         self
     }
+
+    /// List pending OTP challenges for a specific account.
+    pub fn pending_otp_challenges(&self, account_id: &str) -> Vec<OtpChallengeInfo> {
+        let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
+        accounts
+            .get(account_id)
+            .map(|s| {
+                let otp = s.otp.lock().unwrap_or_else(|e| e.into_inner());
+                otp.list_pending()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl Default for MatrixPlugin {
@@ -76,6 +86,73 @@ fn parse_account_config(config: serde_json::Value) -> ChannelResult<MatrixAccoun
     Ok(serde_json::from_value(config)?)
 }
 
+fn merge_json_value(base: &mut serde_json::Value, update: serde_json::Value) {
+    match (base, update) {
+        (serde_json::Value::Object(base_obj), serde_json::Value::Object(update_obj)) => {
+            for (key, value) in update_obj {
+                merge_json_value(
+                    base_obj.entry(key).or_insert(serde_json::Value::Null),
+                    value,
+                );
+            }
+        },
+        (base, update) => *base = update,
+    }
+}
+
+fn has_explicit_secret(update: &serde_json::Map<String, serde_json::Value>, field: &str) -> bool {
+    update
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| {
+            !value.trim().is_empty() && value != moltis_common::secret_serde::REDACTED
+        })
+}
+
+fn sanitize_secret_update_fields(update: &mut serde_json::Map<String, serde_json::Value>) {
+    let switching_to_password = has_explicit_secret(update, "password");
+    let switching_to_access_token = has_explicit_secret(update, "access_token");
+
+    if update
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| {
+            value.trim().is_empty() && !switching_to_password
+                || value == moltis_common::secret_serde::REDACTED
+        })
+    {
+        update.remove("access_token");
+    }
+
+    if update
+        .get("password")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| {
+            value.trim().is_empty() && !switching_to_access_token
+                || value == moltis_common::secret_serde::REDACTED
+        })
+    {
+        update.remove("password");
+    }
+}
+
+fn merge_update_with_existing(
+    update: serde_json::Value,
+    existing: &MatrixAccountConfig,
+) -> ChannelResult<MatrixAccountConfig> {
+    let mut merged = serde_json::to_value(existing)
+        .map_err(|error| ChannelError::external("matrix config serialize", error))?;
+    let mut update = update;
+    let serde_json::Value::Object(update_obj) = &mut update else {
+        return Err(ChannelError::invalid_input(
+            "matrix config update payload must be a JSON object",
+        ));
+    };
+    sanitize_secret_update_fields(update_obj);
+    merge_json_value(&mut merged, update);
+    parse_account_config(merged)
+}
+
 #[async_trait]
 impl ChannelPlugin for MatrixPlugin {
     fn id(&self) -> &str {
@@ -86,6 +163,7 @@ impl ChannelPlugin for MatrixPlugin {
         "Matrix"
     }
 
+    #[instrument(skip(self, config), fields(account_id))]
     async fn start_account(
         &mut self,
         account_id: &str,
@@ -95,67 +173,19 @@ impl ChannelPlugin for MatrixPlugin {
         if cfg.homeserver.is_empty() {
             return Err(ChannelError::invalid_input("homeserver URL is required"));
         }
-        if cfg.access_token.expose_secret().is_empty() {
-            return Err(ChannelError::invalid_input("access_token is required"));
-        }
+        client::auth_mode(&cfg)?;
 
         info!(account_id, homeserver = %cfg.homeserver, "starting matrix account");
 
-        // Build Matrix client
-        let client = Client::builder()
-            .homeserver_url(&cfg.homeserver)
-            .build()
-            .await
-            .map_err(|e| ChannelError::external("matrix client build", e))?;
-
-        // Restore session with access token
-        let token = cfg.access_token.expose_secret().clone();
-        let device_id_str = cfg
-            .device_id
-            .clone()
-            .unwrap_or_else(|| format!("moltis_{account_id}"));
-
-        // Restore session with access token
-        let user_id: OwnedUserId = if let Some(uid) = &cfg.user_id {
-            uid.parse().map_err(|e: matrix_sdk::ruma::IdParseError| {
-                ChannelError::invalid_input(format!("invalid user_id: {e}"))
-            })?
-        } else {
-            return Err(ChannelError::invalid_input(
-                "user_id is required in config (auto-detection not yet supported)",
-            ));
-        };
-
-        let session = matrix_sdk::authentication::matrix::MatrixSession {
-            meta: matrix_sdk::SessionMeta {
-                user_id,
-                device_id: device_id_str.into(),
-            },
-            tokens: matrix_sdk::SessionTokens {
-                access_token: token,
-                refresh_token: None,
-            },
-        };
-        client
-            .restore_session(session)
-            .await
-            .map_err(|e| ChannelError::external("matrix session restore", e))?;
-
-        let bot_user_id = client
-            .user_id()
-            .ok_or_else(|| {
-                ChannelError::external(
-                    "matrix session restore",
-                    std::io::Error::other("user_id not set after restore_session"),
-                )
-            })?
-            .to_owned();
-        info!(account_id, user_id = %bot_user_id, "matrix session restored");
+        let client = client::build_client(&cfg).await?;
+        let bot_user_id = client::authenticate_client(&client, account_id, &cfg).await?;
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
         {
             let otp_cooldown = cfg.otp_cooldown_secs;
+            let mut cfg = cfg;
+            cfg.user_id = Some(bot_user_id.to_string());
             let mut accounts = self.accounts.write().unwrap_or_else(|e| e.into_inner());
             accounts.insert(account_id.to_string(), AccountState {
                 account_id: account_id.to_string(),
@@ -169,61 +199,8 @@ impl ChannelPlugin for MatrixPlugin {
             });
         }
 
-        // Register event handlers
-        let accounts_for_msg = Arc::clone(&self.accounts);
-        let account_id_msg = account_id.to_string();
-        let bot_uid_msg = bot_user_id.clone();
-        client.add_event_handler(
-            move |ev: matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
-                  room: matrix_sdk::Room| {
-                let accounts = Arc::clone(&accounts_for_msg);
-                let aid = account_id_msg.clone();
-                let buid = bot_uid_msg.clone();
-                async move {
-                    handler::handle_room_message(ev, room, aid, accounts, buid).await;
-                }
-            },
-        );
-
-        let accounts_for_invite = Arc::clone(&self.accounts);
-        let account_id_invite = account_id.to_string();
-        let bot_uid_invite = bot_user_id.clone();
-        client.add_event_handler(
-            move |ev: matrix_sdk::ruma::events::room::member::StrippedRoomMemberEvent,
-                  room: matrix_sdk::Room| {
-                let accounts = Arc::clone(&accounts_for_invite);
-                let aid = account_id_invite.clone();
-                let buid = bot_uid_invite.clone();
-                async move {
-                    handler::handle_invite(ev, room, aid, accounts, buid).await;
-                }
-            },
-        );
-
-        // Do initial sync
-        info!(account_id, "performing initial sync...");
-        client
-            .sync_once(SyncSettings::default())
-            .await
-            .map_err(|e| ChannelError::external("matrix initial sync", e))?;
-        info!(
-            account_id,
-            "initial sync complete, starting continuous sync"
-        );
-
-        // Spawn continuous sync loop
-        let cancel_for_sync = cancel.clone();
-        let client_for_sync = client.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = client_for_sync.sync(SyncSettings::default()) => {
-                    warn!("matrix sync loop ended unexpectedly");
-                }
-                () = cancel_for_sync.cancelled() => {
-                    info!("matrix sync loop cancelled");
-                }
-            }
-        });
+        client::register_event_handlers(&client, account_id, &self.accounts, &bot_user_id);
+        client::sync_once_and_spawn_loop(&client, account_id, cancel.clone()).await?;
 
         Ok(())
     }
@@ -279,9 +256,13 @@ impl ChannelPlugin for MatrixPlugin {
         account_id: &str,
         config: serde_json::Value,
     ) -> ChannelResult<()> {
-        let parsed = parse_account_config(config)?;
         let mut accounts = self.accounts.write().unwrap_or_else(|e| e.into_inner());
         if let Some(state) = accounts.get_mut(account_id) {
+            let parsed = merge_update_with_existing(config, &state.config)?;
+            {
+                let mut otp = state.otp.lock().unwrap_or_else(|e| e.into_inner());
+                otp.set_cooldown(parsed.otp_cooldown_secs);
+            }
             state.config = parsed;
             Ok(())
         } else {
@@ -303,6 +284,16 @@ impl ChannelPlugin for MatrixPlugin {
 
     fn thread_context(&self) -> Option<&dyn ChannelThreadContext> {
         Some(&self.outbound)
+    }
+
+    fn as_otp_provider(&self) -> Option<&dyn ChannelOtpProvider> {
+        Some(self)
+    }
+}
+
+impl ChannelOtpProvider for MatrixPlugin {
+    fn pending_otp_challenges(&self, account_id: &str) -> Vec<OtpChallengeInfo> {
+        MatrixPlugin::pending_otp_challenges(self, account_id)
     }
 }
 
@@ -335,9 +326,47 @@ impl ChannelStatus for MatrixPlugin {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        moltis_channels::{ChannelType, InboundMode},
+        crate::{
+            client,
+            client::AuthMode,
+            config::{AutoJoinPolicy, MatrixAccountConfig},
+            state::AccountState,
+        },
+        moltis_channels::{ChannelPlugin, ChannelType, InboundMode, otp::OtpState},
+        secrecy::{ExposeSecret, Secret},
+        tokio_util::sync::CancellationToken,
     };
+
+    use crate::plugin::MatrixPlugin;
+
+    fn test_account_state(cancel: CancellationToken) -> AccountState {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|error| panic!("matrix test runtime should build: {error}"));
+
+        AccountState {
+            account_id: "test".into(),
+            config: MatrixAccountConfig {
+                homeserver: "https://matrix.example.com".into(),
+                access_token: Secret::new("test_token".into()),
+                user_id: Some("@moltis:example.com".into()),
+                ..Default::default()
+            },
+            client: runtime
+                .block_on(
+                    matrix_sdk::Client::builder()
+                        .homeserver_url("https://matrix.example.com")
+                        .build(),
+                )
+                .unwrap_or_else(|error| panic!("matrix test client should build: {error}")),
+            message_log: None,
+            event_sink: None,
+            cancel,
+            bot_user_id: "@moltis:example.com".into(),
+            otp: std::sync::Mutex::new(OtpState::new(300)),
+        }
+    }
 
     #[test]
     fn descriptor_coherence() {
@@ -351,11 +380,12 @@ mod tests {
         assert!(desc.capabilities.supports_threads);
         assert!(desc.capabilities.supports_reactions);
         assert!(desc.capabilities.supports_otp);
-        assert!(!desc.capabilities.supports_interactive); // text fallback
-        assert!(!desc.capabilities.supports_voice_ingest);
+        assert!(desc.capabilities.supports_interactive);
+        assert!(desc.capabilities.supports_voice_ingest);
         assert!(!desc.capabilities.supports_pairing);
 
         assert!(plugin.thread_context().is_some());
+        assert!(plugin.as_otp_provider().is_some());
     }
 
     #[test]
@@ -370,5 +400,263 @@ mod tests {
         let plugin = MatrixPlugin::new();
         assert!(!plugin.has_account("test"));
         assert!(plugin.account_ids().is_empty());
+    }
+
+    #[test]
+    fn pending_otp_challenges_are_exposed_via_provider_trait() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            map.insert("test".into(), test_account_state(cancel));
+        }
+
+        {
+            let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+            let Some(state) = map.get("test") else {
+                panic!("test account inserted");
+            };
+            let mut otp = state.otp.lock().unwrap_or_else(|e| e.into_inner());
+            otp.initiate("alice", Some("alice".into()), Some("Alice".into()));
+        }
+
+        let Some(provider) = plugin.as_otp_provider() else {
+            panic!("matrix should expose otp provider");
+        };
+        let pending = provider.pending_otp_challenges("test");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].peer_id, "alice");
+        assert_eq!(pending[0].username.as_deref(), Some("alice"));
+        assert_eq!(pending[0].sender_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn update_account_config_preserves_otp_state_and_updates_cooldown() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            map.insert("test".into(), test_account_state(cancel));
+        }
+
+        {
+            let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+            let Some(state) = map.get("test") else {
+                panic!("test account inserted");
+            };
+            let mut otp = state.otp.lock().unwrap_or_else(|e| e.into_inner());
+            otp.initiate("alice", Some("alice".into()), None);
+        }
+
+        if let Err(error) = plugin.update_account_config(
+            "test",
+            serde_json::json!({
+                "homeserver": "https://matrix.example.com",
+                "access_token": "test_token",
+                "user_id": "@moltis:example.com",
+                "allowlist": ["alice"],
+                "otp_cooldown_secs": 1,
+            }),
+        ) {
+            panic!("config update should succeed: {error}");
+        }
+
+        {
+            let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+            let Some(state) = map.get("test") else {
+                panic!("test account inserted");
+            };
+            let otp = state.otp.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(otp.has_pending("alice"));
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        {
+            let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+            let Some(state) = map.get("test") else {
+                panic!("test account inserted");
+            };
+            let mut otp = state.otp.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(
+                otp.verify("alice", "000000"),
+                moltis_channels::otp::OtpVerifyResult::WrongCode { attempts_left: 2 }
+            );
+            assert_eq!(
+                otp.verify("alice", "000001"),
+                moltis_channels::otp::OtpVerifyResult::WrongCode { attempts_left: 1 }
+            );
+            assert_eq!(
+                otp.verify("alice", "000002"),
+                moltis_channels::otp::OtpVerifyResult::LockedOut
+            );
+            assert_eq!(
+                otp.initiate("alice", Some("alice".into()), None),
+                moltis_channels::otp::OtpInitResult::LockedOut
+            );
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        {
+            let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+            let Some(state) = map.get("test") else {
+                panic!("test account inserted");
+            };
+            let mut otp = state.otp.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(matches!(
+                otp.initiate("alice", Some("alice".into()), None),
+                moltis_channels::otp::OtpInitResult::Created(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn update_account_config_preserves_redacted_access_token_and_identity_fields() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            map.insert("test".into(), test_account_state(cancel));
+        }
+
+        if let Err(error) = plugin.update_account_config(
+            "test",
+            serde_json::json!({
+                "access_token": "[REDACTED]",
+                "dm_policy": "open",
+            }),
+        ) {
+            panic!("config update should succeed: {error}");
+        }
+
+        let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+        let Some(state) = map.get("test") else {
+            panic!("test account inserted");
+        };
+        assert_eq!(state.config.homeserver, "https://matrix.example.com");
+        assert_eq!(state.config.user_id.as_deref(), Some("@moltis:example.com"));
+        assert_eq!(state.config.access_token.expose_secret(), "test_token");
+        assert_eq!(
+            state.config.dm_policy,
+            moltis_channels::gating::DmPolicy::Open
+        );
+    }
+
+    #[test]
+    fn partial_update_preserves_omitted_fields_instead_of_resetting_defaults() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            let mut state = test_account_state(cancel);
+            state.config.mention_mode = moltis_channels::gating::MentionMode::Always;
+            state.config.reply_to_message = false;
+            state.config.auto_join = AutoJoinPolicy::Allowlist;
+            map.insert("test".into(), state);
+        }
+
+        if let Err(error) = plugin.update_account_config(
+            "test",
+            serde_json::json!({
+                "dm_policy": "open",
+            }),
+        ) {
+            panic!("partial update should succeed: {error}");
+        }
+
+        let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+        let Some(state) = map.get("test") else {
+            panic!("test account inserted");
+        };
+        assert_eq!(
+            state.config.mention_mode,
+            moltis_channels::gating::MentionMode::Always
+        );
+        assert!(!state.config.reply_to_message);
+        assert_eq!(state.config.auto_join, AutoJoinPolicy::Allowlist);
+        assert_eq!(
+            state.config.dm_policy,
+            moltis_channels::gating::DmPolicy::Open
+        );
+    }
+
+    #[test]
+    fn config_update_can_switch_from_access_token_to_password_auth() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            map.insert("test".into(), test_account_state(cancel));
+        }
+
+        if let Err(error) = plugin.update_account_config(
+            "test",
+            serde_json::json!({
+                "access_token": "",
+                "password": "wordpass",
+                "user_id": "@moltis:example.com",
+            }),
+        ) {
+            panic!("auth mode switch should succeed: {error}");
+        }
+
+        let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+        let Some(state) = map.get("test") else {
+            panic!("test account inserted");
+        };
+        assert!(state.config.access_token.expose_secret().is_empty());
+        assert_eq!(
+            state
+                .config
+                .password
+                .as_ref()
+                .map(|secret| secret.expose_secret().as_str()),
+            Some("wordpass")
+        );
+        assert!(matches!(
+            client::auth_mode(&state.config),
+            Ok(AuthMode::Password)
+        ));
+    }
+
+    #[test]
+    fn redacted_password_update_preserves_existing_password() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            let mut state = test_account_state(cancel);
+            state.config.access_token = Secret::new(String::new());
+            state.config.password = Some(Secret::new("wordpass".into()));
+            map.insert("test".into(), state);
+        }
+
+        if let Err(error) = plugin.update_account_config(
+            "test",
+            serde_json::json!({
+                "password": "[REDACTED]",
+                "room_policy": "open",
+            }),
+        ) {
+            panic!("password-preserving update should succeed: {error}");
+        }
+
+        let map = plugin.accounts.read().unwrap_or_else(|e| e.into_inner());
+        let Some(state) = map.get("test") else {
+            panic!("test account inserted");
+        };
+        assert_eq!(
+            state
+                .config
+                .password
+                .as_ref()
+                .map(|secret| secret.expose_secret().as_str()),
+            Some("wordpass")
+        );
+        assert_eq!(
+            state.config.room_policy,
+            moltis_channels::gating::GroupPolicy::Open
+        );
     }
 }

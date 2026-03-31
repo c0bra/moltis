@@ -31,6 +31,7 @@
   - [Telegram](telegram.md)
   - [Discord](discord.md)
   - [Slack](slack.md)
+  - [Matrix](matrix.md)
   - [WhatsApp](whatsapp.md)
 - [Browser Automation](browser-automation.md)
 - [CalDAV (Calendars)](caldav.md)

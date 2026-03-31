@@ -10,6 +10,9 @@ import {
 	defaultTeamsBaseUrl,
 	fetchChannelStatus,
 	generateWebhookSecretHex,
+	matrixCredentialLabel,
+	matrixCredentialPlaceholder,
+	normalizeMatrixAuthMode,
 	validateChannelFields,
 } from "./channel-utils.js";
 import { onEvent } from "./events.js";
@@ -39,6 +42,7 @@ var showAddTeams = signal(false);
 var showAddDiscord = signal(false);
 var showAddWhatsApp = signal(false);
 var showAddSlack = signal(false);
+var showAddMatrix = signal(false);
 var editingChannel = signal(null);
 var sendersAccount = signal("");
 
@@ -58,6 +62,7 @@ function channelLabel(type) {
 	if (t === "discord") return "Discord";
 	if (t === "whatsapp") return "WhatsApp";
 	if (t === "slack") return "Slack";
+	if (t === "matrix") return "Matrix";
 	return "Telegram";
 }
 
@@ -134,6 +139,8 @@ function ChannelIcon({ type }) {
 	if (t === "msteams") return html`<span class="icon icon-msteams"></span>`;
 	if (t === "discord") return html`<span class="icon icon-discord"></span>`;
 	if (t === "whatsapp") return html`<span class="icon icon-whatsapp"></span>`;
+	if (t === "slack") return html`<span class="icon icon-slack"></span>`;
+	if (t === "matrix") return html`<span class="icon icon-matrix"></span>`;
 	return html`<span class="icon icon-telegram"></span>`;
 }
 
@@ -189,7 +196,7 @@ function ChannelCard(props) {
 
 // ── Connect channel buttons ──────────────────────────────────
 function ConnectButtons() {
-	var offered = new Set(getGon("channels_offered") || ["telegram"]);
+	var offered = new Set(getGon("channels_offered") || ["telegram", "discord", "slack", "matrix"]);
 	return html`<div class="flex gap-2">
 		${
 			offered.has("telegram") &&
@@ -225,6 +232,15 @@ function ConnectButtons() {
 				if (connected.value) showAddSlack.value = true;
 			}}>
 			<span class="icon icon-slack"></span> Connect Slack
+		</button>`
+		}
+		${
+			offered.has("matrix") &&
+			html`<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
+			onClick=${() => {
+				if (connected.value) showAddMatrix.value = true;
+			}}>
+			<span class="icon icon-matrix"></span> Connect Matrix
 		</button>`
 		}
 		${
@@ -925,6 +941,193 @@ function AddSlackModal() {
 	  </${Modal}>`;
 }
 
+// ── Add Matrix modal ─────────────────────────────────────────
+function AddMatrixModal() {
+	var error = useSignal("");
+	var saving = useSignal(false);
+	var addModel = useSignal("");
+	var userAllowlistItems = useSignal([]);
+	var roomAllowlistItems = useSignal([]);
+	var accountDraft = useSignal("");
+	var homeserverDraft = useSignal("");
+	var authModeDraft = useSignal("access_token");
+	var userIdDraft = useSignal("");
+	var credentialDraft = useSignal("");
+	var deviceDisplayNameDraft = useSignal("");
+
+	function onSubmit(e) {
+		e.preventDefault();
+		var form = e.target.closest(".channel-form");
+		var accountId = accountDraft.value.trim();
+		var authMode = normalizeMatrixAuthMode(authModeDraft.value);
+		var credential = credentialDraft.value.trim();
+		var homeserver = homeserverDraft.value.trim();
+		var userId = userIdDraft.value.trim();
+		var v = validateChannelFields("matrix", accountId, credential, {
+			matrixAuthMode: authMode,
+			matrixUserId: userId,
+		});
+		if (!v.valid) {
+			error.value = v.error;
+			return;
+		}
+		if (!homeserver) {
+			error.value = "Homeserver URL is required.";
+			return;
+		}
+		error.value = "";
+		saving.value = true;
+		var addConfig = {
+			homeserver: homeserver,
+			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+			room_policy: form.querySelector("[data-field=roomPolicy]").value,
+			mention_mode: form.querySelector("[data-field=mentionMode]").value,
+			auto_join: form.querySelector("[data-field=autoJoin]").value,
+			user_allowlist: userAllowlistItems.value,
+			room_allowlist: roomAllowlistItems.value,
+		};
+		if (authMode === "password") {
+			addConfig.password = credential;
+		} else {
+			addConfig.access_token = credential;
+		}
+		if (userId) addConfig.user_id = userId;
+		if (deviceDisplayNameDraft.value.trim()) addConfig.device_display_name = deviceDisplayNameDraft.value.trim();
+		if (addModel.value) {
+			addConfig.model = addModel.value;
+			var found = modelsSig.value.find((x) => x.id === addModel.value);
+			if (found?.provider) addConfig.model_provider = found.provider;
+		}
+		addChannel("matrix", accountId, addConfig).then((res) => {
+			saving.value = false;
+			if (res?.ok) {
+				showAddMatrix.value = false;
+				addModel.value = "";
+				userAllowlistItems.value = [];
+				roomAllowlistItems.value = [];
+				accountDraft.value = "";
+				homeserverDraft.value = "";
+				authModeDraft.value = "access_token";
+				userIdDraft.value = "";
+				credentialDraft.value = "";
+				deviceDisplayNameDraft.value = "";
+				loadChannels();
+			} else {
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect Matrix.";
+			}
+		});
+	}
+
+	var defaultPlaceholder =
+		modelsSig.value.length > 0
+			? `(default: ${modelsSig.value[0].displayName || modelsSig.value[0].id})`
+			: "(server default)";
+
+	return html`<${Modal} show=${showAddMatrix.value} onClose=${() => {
+		showAddMatrix.value = false;
+	}}
+	    title="Connect Matrix">
+	    <div class="channel-form">
+	      <div class="channel-card">
+	        <div>
+	          <span class="text-xs font-medium text-[var(--text-strong)]">Connect a Matrix bot user</span>
+	          <div class="text-xs text-[var(--muted)] channel-help">1. Choose any local account ID for Moltis below</div>
+	          <div class="text-xs text-[var(--muted)]">2. Use either an access token or password login, Matrix user ID is only required for password auth</div>
+	          <div class="text-xs text-[var(--muted)]">3. Choose how invites are auto-joined, then allowlist the DMs and rooms Moltis should respond to</div>
+	        </div>
+	      </div>
+	      <${ConnectionModeHint} type="matrix" />
+	      <label class="text-xs text-[var(--muted)]">Account ID</label>
+	      <input data-field="accountId" type="text" placeholder="e.g. my-matrix-bot"
+	        value=${accountDraft.value}
+	        onInput=${(e) => {
+						accountDraft.value = e.target.value;
+					}}
+	        class="channel-input" />
+	      <label class="text-xs text-[var(--muted)]">Homeserver URL</label>
+	      <input data-field="homeserver" type="text" placeholder="https://matrix.example.com"
+	        value=${homeserverDraft.value}
+	        onInput=${(e) => {
+						homeserverDraft.value = e.target.value;
+					}}
+	        	        class="channel-input" />
+	      <label class="text-xs text-[var(--muted)]">Authentication</label>
+	      <select data-field="authMode" class="channel-select"
+	        value=${authModeDraft.value}
+	        onChange=${(e) => {
+						authModeDraft.value = normalizeMatrixAuthMode(e.target.value);
+					}}>
+	        <option value="access_token">Access token</option>
+	        <option value="password">Password</option>
+	      </select>
+	      <label class="text-xs text-[var(--muted)]">Matrix User ID${authModeDraft.value === "password" ? " (required)" : " (optional)"}</label>
+	      <input data-field="userId" type="text" placeholder="@bot:example.com"
+	        value=${userIdDraft.value}
+	        onInput=${(e) => {
+						userIdDraft.value = e.target.value;
+					}}
+	        class="channel-input" />
+	      <label class="text-xs text-[var(--muted)]">${matrixCredentialLabel(authModeDraft.value)}</label>
+	      <input data-field="credential" type="password" placeholder=${matrixCredentialPlaceholder(authModeDraft.value)}
+	        value=${credentialDraft.value}
+	        onInput=${(e) => {
+						credentialDraft.value = e.target.value;
+					}}
+	        class="channel-input"
+	        autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" />
+	      <label class="text-xs text-[var(--muted)]">Device Display Name (optional)</label>
+	      <input data-field="deviceDisplayName" type="text" placeholder="Moltis Matrix Bot"
+	        value=${deviceDisplayNameDraft.value}
+	        onInput=${(e) => {
+						deviceDisplayNameDraft.value = e.target.value;
+					}}
+	        class="channel-input" />
+	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
+	      <select data-field="dmPolicy" class="channel-select">
+	        <option value="allowlist">Allowlist only</option>
+	        <option value="open">Open (anyone)</option>
+	        <option value="disabled">Disabled</option>
+	      </select>
+	      <label class="text-xs text-[var(--muted)]">Room Policy</label>
+	      <select data-field="roomPolicy" class="channel-select">
+	        <option value="allowlist">Room allowlist only</option>
+	        <option value="open">Open (any joined room)</option>
+	        <option value="disabled">Disabled</option>
+	      </select>
+	      <label class="text-xs text-[var(--muted)]">Room Mention Mode</label>
+	      <select data-field="mentionMode" class="channel-select">
+	        <option value="mention">Must mention bot</option>
+	        <option value="always">Always respond</option>
+	        <option value="none">Never respond in rooms</option>
+	      </select>
+	      <label class="text-xs text-[var(--muted)]">Invite Auto-Join</label>
+	      <select data-field="autoJoin" class="channel-select">
+	        <option value="always">Always join invites</option>
+	        <option value="allowlist">Only when inviter or room is allowlisted</option>
+	        <option value="off">Do not auto-join</option>
+	      </select>
+	      <label class="text-xs text-[var(--muted)]">Default Model</label>
+	      <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
+	        onChange=${(v) => {
+						addModel.value = v;
+					}}
+	        placeholder=${defaultPlaceholder} />
+	      <label class="text-xs text-[var(--muted)]">DM Allowlist (Matrix user IDs)</label>
+	      <${AllowlistInput} value=${userAllowlistItems.value} onChange=${(items) => {
+					userAllowlistItems.value = items;
+				}} />
+	      <label class="text-xs text-[var(--muted)]">Room Allowlist (room IDs or aliases)</label>
+	      <${AllowlistInput} value=${roomAllowlistItems.value} onChange=${(items) => {
+					roomAllowlistItems.value = items;
+				}} />
+	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
+	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
+	        ${saving.value ? "Connecting\u2026" : "Connect Matrix"}
+	      </button>
+	    </div>
+	  </${Modal}>`;
+}
+
 // ── QR code display (WhatsApp pairing) ───────────────────────
 function qrSvgObjectUrl(svg) {
 	if (!svg) return null;
@@ -1088,13 +1291,19 @@ function EditChannelModal() {
 	var saving = useSignal(false);
 	var editModel = useSignal("");
 	var allowlistItems = useSignal([]);
+	var roomAllowlistItems = useSignal([]);
 	var editCredential = useSignal("");
 	var editWebhookSecret = useSignal("");
+	var editMatrixAuthMode = useSignal("access_token");
+	var editMatrixDeviceDisplayName = useSignal("");
 	useEffect(() => {
 		editModel.value = ch?.config?.model || "";
-		allowlistItems.value = ch?.config?.allowlist || [];
+		allowlistItems.value = ch?.config?.allowlist || ch?.config?.user_allowlist || [];
+		roomAllowlistItems.value = ch?.config?.room_allowlist || [];
 		editCredential.value = "";
 		editWebhookSecret.value = ch?.config?.webhook_secret || "";
+		editMatrixAuthMode.value = ch?.config?.password ? "password" : "access_token";
+		editMatrixDeviceDisplayName.value = ch?.config?.device_display_name || "";
 	}, [ch]);
 	if (!ch) return null;
 	var cfg = ch.config || {};
@@ -1103,6 +1312,7 @@ function EditChannelModal() {
 	var isDiscord = chType === "discord";
 	var isWhatsApp = chType === "whatsapp";
 	var isTelegram = chType === "telegram";
+	var isMatrix = chType === "matrix";
 
 	function addModelToConfig(config) {
 		if (!editModel.value) return;
@@ -1111,7 +1321,7 @@ function EditChannelModal() {
 		if (found?.provider) config.model_provider = found.provider;
 	}
 
-	function addChannelCredentials(config) {
+	function addChannelCredentials(config, form) {
 		if (isTeams) {
 			config.app_id = cfg.app_id || ch.account_id;
 			config.app_password = editCredential.value || cfg.app_password || "";
@@ -1120,6 +1330,18 @@ function EditChannelModal() {
 			config.token = editCredential.value || cfg.token || "";
 		} else if (isTelegram) {
 			config.token = cfg.token || "";
+		} else if (isMatrix) {
+			config.homeserver = form.querySelector("[data-field=homeserver]")?.value || cfg.homeserver || "";
+			config.user_id = form.querySelector("[data-field=userId]")?.value || cfg.user_id || "";
+			config.device_id = cfg.device_id || undefined;
+			config.device_display_name = editMatrixDeviceDisplayName.value.trim() || null;
+			if (normalizeMatrixAuthMode(editMatrixAuthMode.value) === "password") {
+				config.password = editCredential.value || cfg.password || "";
+				config.access_token = "";
+			} else {
+				config.access_token = editCredential.value || cfg.access_token || "";
+				config.password = null;
+			}
 		}
 	}
 
@@ -1127,10 +1349,16 @@ function EditChannelModal() {
 		var updateConfig = {};
 		updateConfig.dm_policy = form.querySelector("[data-field=dmPolicy]")?.value || "open";
 		updateConfig.allowlist = allowlistItems.value;
+		if (isMatrix) {
+			updateConfig.user_allowlist = allowlistItems.value;
+			updateConfig.room_policy = form.querySelector("[data-field=roomPolicy]")?.value || cfg.room_policy || "allowlist";
+			updateConfig.auto_join = form.querySelector("[data-field=autoJoin]")?.value || cfg.auto_join || "always";
+			updateConfig.room_allowlist = roomAllowlistItems.value;
+		}
 		if (!isWhatsApp) {
 			updateConfig.mention_mode = form.querySelector("[data-field=mentionMode]")?.value || "mention";
 		}
-		addChannelCredentials(updateConfig);
+		addChannelCredentials(updateConfig, form);
 		addModelToConfig(updateConfig);
 		return updateConfig;
 	}
@@ -1196,6 +1424,54 @@ function EditChannelModal() {
 									}} />
 				      </div>`
 				}
+	      ${
+					isMatrix &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">Authentication</label>
+				        <select class="channel-select" value=${editMatrixAuthMode.value}
+				          onChange=${(e) => {
+										editMatrixAuthMode.value = normalizeMatrixAuthMode(e.target.value);
+									}}>
+				          <option value="access_token">Access token</option>
+				          <option value="password">Password</option>
+				        </select>
+				      </div>`
+				}
+	      ${
+					isMatrix &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">Homeserver URL</label>
+				        <input data-field="homeserver" type="text" class="channel-input" defaultValue=${cfg.homeserver || ""} />
+				      </div>`
+				}
+	      ${
+					isMatrix &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">Matrix User ID${editMatrixAuthMode.value === "password" ? " (required)" : " (optional)"}</label>
+				        <input data-field="userId" type="text" class="channel-input" defaultValue=${cfg.user_id || ""} />
+				      </div>`
+				}
+	      ${
+					isMatrix &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">${matrixCredentialLabel(editMatrixAuthMode.value)} (optional: leave blank to keep existing)</label>
+				        <input type="password" class="channel-input" value=${editCredential.value}
+				          onInput=${(e) => {
+										editCredential.value = e.target.value;
+									}}
+				          placeholder=${matrixCredentialPlaceholder(editMatrixAuthMode.value)} />
+				      </div>`
+				}
+	      ${
+					isMatrix &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">Device Display Name (optional)</label>
+				        <input type="text" class="channel-input" value=${editMatrixDeviceDisplayName.value}
+				          onInput=${(e) => {
+										editMatrixDeviceDisplayName.value = e.target.value;
+									}} />
+				      </div>`
+				}
 	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
 	      <select data-field="dmPolicy" class="channel-select" value=${cfg.dm_policy || (isWhatsApp ? "open" : "allowlist")}>
 	        ${isWhatsApp && html`<option value="open">Open (anyone)</option>`}
@@ -1214,6 +1490,23 @@ function EditChannelModal() {
         </select>
       `
 			}
+      ${
+				isMatrix &&
+				html`
+        <label class="text-xs text-[var(--muted)]">Room Policy</label>
+        <select data-field="roomPolicy" class="channel-select" value=${cfg.room_policy || "allowlist"}>
+          <option value="allowlist">Room allowlist only</option>
+          <option value="open">Open (any joined room)</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Invite Auto-Join</label>
+        <select data-field="autoJoin" class="channel-select" value=${cfg.auto_join || "always"}>
+          <option value="always">Always join invites</option>
+          <option value="allowlist">Only when inviter or room is allowlisted</option>
+          <option value="off">Do not auto-join</option>
+        </select>
+      `
+			}
       <label class="text-xs text-[var(--muted)]">Default Model</label>
       <${ModelSelect} models=${modelsSig.value} value=${editModel.value}
         onChange=${(v) => {
@@ -1224,6 +1517,15 @@ function EditChannelModal() {
       <${AllowlistInput} value=${allowlistItems.value} onChange=${(v) => {
 				allowlistItems.value = v;
 			}} />
+      ${
+				isMatrix &&
+				html`
+        <label class="text-xs text-[var(--muted)]">Room Allowlist</label>
+        <${AllowlistInput} value=${roomAllowlistItems.value} onChange=${(v) => {
+					roomAllowlistItems.value = v;
+				}} />
+      `
+			}
       ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn"
 	        onClick=${onSave} disabled=${saving.value}>
@@ -1309,6 +1611,7 @@ function ChannelsPage() {
     <${AddTeamsModal} />
     <${AddDiscordModal} />
     <${AddSlackModal} />
+    <${AddMatrixModal} />
     <${AddWhatsAppModal} />
     <${EditChannelModal} />
     <${ConfirmDialog} />
@@ -1324,6 +1627,8 @@ export function initChannels(container) {
 	showAddTelegram.value = false;
 	showAddTeams.value = false;
 	showAddDiscord.value = false;
+	showAddSlack.value = false;
+	showAddMatrix.value = false;
 	showAddWhatsApp.value = false;
 	editingChannel.value = null;
 	sendersAccount.value = "";

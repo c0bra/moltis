@@ -6742,9 +6742,11 @@ name = "moltis-matrix"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "matrix-sdk",
  "moltis-channels",
  "moltis-common",
+ "moltis-metrics",
  "secrecy 0.8.0",
  "serde",
  "serde_json",
@@ -11413,7 +11415,6 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

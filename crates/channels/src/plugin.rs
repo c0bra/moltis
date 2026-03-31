@@ -172,13 +172,13 @@ impl ChannelType {
                     inbound_mode: InboundMode::GatewayLoop,
                     supports_outbound: true,
                     supports_streaming: true,
-                    supports_interactive: false,
+                    supports_interactive: true,
                     supports_threads: true,
-                    supports_voice_ingest: false,
+                    supports_voice_ingest: true,
                     supports_pairing: false,
                     supports_otp: true,
                     supports_reactions: true,
-                    supports_location: false,
+                    supports_location: true,
                 },
             },
         }
@@ -973,9 +973,11 @@ mod tests {
     fn channel_type_round_trip() {
         for (s, expected) in [
             ("telegram", ChannelType::Telegram),
+            ("whatsapp", ChannelType::Whatsapp),
             ("msteams", ChannelType::MsTeams),
             ("discord", ChannelType::Discord),
             ("slack", ChannelType::Slack),
+            ("matrix", ChannelType::Matrix),
         ] {
             let parsed: ChannelType = s.parse().unwrap_or_else(|e| panic!("parse {s}: {e}"));
             assert_eq!(parsed, expected);
@@ -994,9 +996,11 @@ mod tests {
     fn channel_type_serde_round_trip() {
         for ct in [
             ChannelType::Telegram,
+            ChannelType::Whatsapp,
             ChannelType::MsTeams,
             ChannelType::Discord,
             ChannelType::Slack,
+            ChannelType::Matrix,
         ] {
             let json = serde_json::to_string(&ct).unwrap_or_else(|e| panic!("serialize: {e}"));
             let back: ChannelType =
@@ -1008,7 +1012,7 @@ mod tests {
     #[test]
     fn all_covers_every_variant() {
         // If a new variant is added to ChannelType, this test forces updating ALL.
-        assert_eq!(ChannelType::ALL.len(), 5);
+        assert_eq!(ChannelType::ALL.len(), 6);
         for ct in ChannelType::ALL {
             // descriptor() must not panic
             let desc = ct.descriptor();
@@ -1026,6 +1030,7 @@ mod tests {
         );
         assert_eq!(ChannelType::Discord.descriptor().display_name, "Discord");
         assert_eq!(ChannelType::Slack.descriptor().display_name, "Slack");
+        assert_eq!(ChannelType::Matrix.descriptor().display_name, "Matrix");
     }
 
     #[test]

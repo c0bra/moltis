@@ -2483,6 +2483,24 @@ offered = ["telegram", "slack"]
     }
 
     #[test]
+    fn channels_offered_matrix_accepted() {
+        let toml = r#"
+[channels]
+offered = ["telegram", "matrix"]
+"#;
+        let result = validate_toml_str(toml);
+        let warning = result
+            .diagnostics
+            .iter()
+            .find(|d| d.path == "channels.offered[1]" && d.category == "unknown-field");
+        assert!(
+            warning.is_none(),
+            "matrix should be accepted, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
     fn channels_offered_dynamic_type_accepted() {
         let toml = r#"
 [channels]
