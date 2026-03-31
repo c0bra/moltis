@@ -10,7 +10,22 @@ Moltis releases use **dual signing** to provide strong supply chain guarantees:
 
 ## Quick Verification
 
-### 1. Verify checksums
+The easiest way to verify a release is with the included script:
+
+```bash
+# Verify all artifacts for a release (fetches GPG key automatically)
+./scripts/verify-release.sh --version VERSION
+
+# Also check SHA256 checksums
+./scripts/verify-release.sh --checksums --version VERSION
+
+# Verify specific local files
+./scripts/verify-release.sh moltis-VERSION-x86_64-unknown-linux-gnu.tar.gz
+```
+
+### Manual Verification
+
+#### 1. Verify checksums
 
 ```bash
 # Download the artifact and its checksum
@@ -20,13 +35,11 @@ curl -LO https://github.com/moltis-org/moltis/releases/download/VERSION/moltis-V
 sha256sum --check moltis-VERSION-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
-### 2. Verify GPG signature
+#### 2. Verify GPG signature
 
 ```bash
 # Import the maintainer's public key (one-time)
-# Find the fingerprint on the maintainer's GitHub profile (Settings > SSH and GPG keys)
-# or at https://keys.openpgp.org
-gpg --keyserver keys.openpgp.org --recv-keys <KEY_FINGERPRINT>
+curl -fsSL https://pen.so/gpg.asc | gpg --import
 
 # Download the detached signature
 curl -LO https://github.com/moltis-org/moltis/releases/download/VERSION/moltis-VERSION-x86_64-unknown-linux-gnu.tar.gz.asc
@@ -39,7 +52,7 @@ gpg --verify \
 
 You should see `Good signature from ...` with the maintainer's identity.
 
-### 3. Verify Sigstore signature
+#### 3. Verify Sigstore signature
 
 ```bash
 # Install cosign: https://docs.sigstore.dev/cosign/system_config/installation/
@@ -56,7 +69,7 @@ cosign verify-blob \
   moltis-VERSION-x86_64-unknown-linux-gnu.tar.gz
 ```
 
-### 4. Verify Docker images
+#### 4. Verify Docker images
 
 ```bash
 cosign verify \
