@@ -13,6 +13,7 @@ import {
 	defaultTeamsBaseUrl,
 	fetchChannelStatus,
 	generateWebhookSecretHex,
+	MATRIX_DOCS_URL,
 	matrixCredentialLabel,
 	matrixCredentialPlaceholder,
 	normalizeMatrixAuthMode,
@@ -2677,6 +2678,15 @@ function MatrixForm({ onConnected, error, setError }) {
 				placeholder=${matrixCredentialPlaceholder(authMode)}
 				autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false"
 				name="matrix_credential" />
+			<div class="text-xs text-[var(--muted)] mt-1">
+				${
+					authMode === "password"
+						? "Use the password for the dedicated Matrix bot account."
+						: html`Get the access token in Element: <span class="font-mono">Settings -> Help & About -> Advanced -> Access Token</span>.`
+				}
+				${" "}
+				<a href=${MATRIX_DOCS_URL} target="_blank" rel="noreferrer" class="text-[var(--accent)] underline">Matrix setup docs</a>
+			</div>
 		</div>
 		<div>
 			<label class="text-xs text-[var(--muted)] mb-1 block">Device Display Name (optional)</label>

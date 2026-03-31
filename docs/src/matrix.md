@@ -56,6 +56,22 @@ passwords, never commit them to version control. Moltis stores them with
 `secrecy::Secret` and redacts them from logs and API responses.
 ```
 
+## Getting an Access Token
+
+If you want to use access-token auth instead of password auth, Element can show
+the token for the currently logged-in account:
+
+1. Sign into the dedicated Matrix bot account in Element
+2. Open `Settings`
+3. Open `Help & About`
+4. Expand `Advanced`
+5. Click `Access Token`
+
+Use that token as `access_token` in the Matrix channel config.
+
+If you do not want to handle a raw access token, Moltis also supports password
+login. In that case, set `user_id` and `password` instead.
+
 ## Configuration
 
 Add a `[channels.matrix.<account-id>]` section to your `moltis.toml`:

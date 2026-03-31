@@ -10,6 +10,7 @@ import {
 	defaultTeamsBaseUrl,
 	fetchChannelStatus,
 	generateWebhookSecretHex,
+	MATRIX_DOCS_URL,
 	matrixCredentialLabel,
 	matrixCredentialPlaceholder,
 	normalizeMatrixAuthMode,
@@ -1075,6 +1076,15 @@ function AddMatrixModal() {
 					}}
 	        class="channel-input"
 	        autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" />
+	      <div class="text-xs text-[var(--muted)]">
+	        ${
+						authModeDraft.value === "password"
+							? "Use the password for the dedicated Matrix bot account."
+							: html`Get the access token in Element: <span class="font-mono">Settings -> Help & About -> Advanced -> Access Token</span>.`
+					}
+	        ${" "}
+	        <a href=${MATRIX_DOCS_URL} target="_blank" rel="noreferrer" class="text-[var(--accent)] underline">Matrix setup docs</a>
+	      </div>
 	      <label class="text-xs text-[var(--muted)]">Device Display Name (optional)</label>
 	      <input data-field="deviceDisplayName" type="text" placeholder="Moltis Matrix Bot"
 	        value=${deviceDisplayNameDraft.value}

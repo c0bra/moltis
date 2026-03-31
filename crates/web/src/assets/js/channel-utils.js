@@ -4,6 +4,8 @@
 
 import { sendRpc } from "./helpers.js";
 
+export var MATRIX_DOCS_URL = "https://docs.moltis.org/matrix.html";
+
 /**
  * Validate required channel fields before submission.
  * @param {string} type - channel type

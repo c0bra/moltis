@@ -321,6 +321,11 @@ test.describe("Settings navigation", () => {
 		await expect(page.getByRole("heading", { name: "Connect Matrix", exact: true })).toBeVisible();
 		const accountInput = page.locator('input[data-field="accountId"]');
 		await expect(accountInput).toBeVisible();
+		await expect(page.getByText("Settings -> Help & About -> Advanced -> Access Token")).toBeVisible();
+		await expect(page.getByRole("link", { name: "Matrix setup docs", exact: true })).toHaveAttribute(
+			"href",
+			"https://docs.moltis.org/matrix.html",
+		);
 
 		await page.evaluate(async () => {
 			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
