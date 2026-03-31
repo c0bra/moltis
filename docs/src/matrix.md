@@ -74,7 +74,14 @@ login. In that case, set `user_id` and `password` instead.
 
 ## Configuration
 
-Add a `[channels.matrix.<account-id>]` section to your `moltis.toml`:
+Matrix can be configured either:
+
+- manually in `moltis.toml`
+- through the web UI in **Settings -> Channels**
+
+Web UI channel accounts are stored in the internal `channels` table in `data_dir()/moltis.db`. They are not written back into `moltis.toml`. If you need a Matrix setting that does not have a dedicated field yet, use the advanced JSON config editor in the channel form.
+
+Manual file configuration uses a `[channels.matrix.<account-id>]` section in `moltis.toml`:
 
 ```toml
 [channels.matrix.my-bot]
@@ -127,6 +134,22 @@ offered = ["telegram", "discord", "slack", "matrix"]
 | `ack_reaction` | no | `"👀"` | Emoji reaction added while processing, omit to disable |
 | `otp_self_approval` | no | `true` | Enable OTP self-approval for non-allowlisted DM users |
 | `otp_cooldown_secs` | no | `300` | Cooldown in seconds after 3 failed OTP attempts |
+
+### Web UI Notes
+
+When you add Matrix through the web UI:
+
+- the homeserver field defaults to `https://matrix.org`
+- Moltis auto-generates the internal `account_id`
+- the saved account lives in `data_dir()/moltis.db`, not in `moltis.toml`
+
+If you want to inspect web-added channels directly, query the SQLite database:
+
+```bash
+sqlite3 ~/.moltis/moltis.db 'select channel_type, account_id, config from channels;'
+```
+
+If you use `MOLTIS_DATA_DIR` or `--data-dir`, check that directory instead of `~/.moltis`.
 
 ### Full Example
 

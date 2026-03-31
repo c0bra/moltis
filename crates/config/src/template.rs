@@ -589,6 +589,9 @@ reset_on_exit = true              # Reset serve/funnel when gateway shuts down
 # CHANNELS
 # ══════════════════════════════════════════════════════════════════════════════
 # External messaging integrations.
+# Note: channels added or edited in the web UI are stored in Moltis's internal
+# database at data_dir()/moltis.db. They are not written back into this file.
+# Keep channel config here only if you want to manage it manually in TOML.
 
 [channels]
 # Which channel types appear in the web UI's "+ Add Channel" menu.

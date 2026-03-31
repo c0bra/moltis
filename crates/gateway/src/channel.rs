@@ -26,6 +26,44 @@ fn unix_now() -> i64 {
         .as_secs() as i64
 }
 
+fn is_redacted_secret(value: &Value) -> bool {
+    matches!(value, Value::String(text) if text == moltis_common::secret_serde::REDACTED)
+}
+
+fn merge_channel_config_value(existing: &mut Value, patch: Value) {
+    if is_redacted_secret(&patch) {
+        return;
+    }
+
+    match (existing, patch) {
+        (Value::Object(existing_obj), Value::Object(patch_obj)) => {
+            for (key, patch_value) in patch_obj {
+                if is_redacted_secret(&patch_value) {
+                    continue;
+                }
+                if let Some(existing_value) = existing_obj.get_mut(&key) {
+                    merge_channel_config_value(existing_value, patch_value);
+                } else {
+                    existing_obj.insert(key, patch_value);
+                }
+            }
+        },
+        (existing_value, patch_value) => {
+            *existing_value = patch_value;
+        },
+    }
+}
+
+fn merge_channel_config(existing: Option<Value>, patch: Value) -> Value {
+    match existing {
+        Some(mut existing_value) => {
+            merge_channel_config_value(&mut existing_value, patch);
+            existing_value
+        },
+        None => patch,
+    }
+}
+
 /// Live channel service backed by the channel registry.
 ///
 /// All per-channel dispatch is handled by the registry — no match arms needed.
@@ -291,13 +329,23 @@ impl ChannelService for LiveChannelService {
             .get("config")
             .cloned()
             .ok_or_else(|| "missing 'config'".to_string())?;
+        let ct = channel_type.as_str();
+        let existing = self
+            .store
+            .get(ct, account_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let created_at = existing
+            .as_ref()
+            .map(|stored| stored.created_at)
+            .unwrap_or_else(unix_now);
+        let config = merge_channel_config(existing.map(|stored| stored.config), config);
 
         info!(
             account_id,
             channel_type = channel_type.as_str(),
             "updating channel account"
         );
-        let ct = channel_type.as_str();
         let mut live_update_warning = None;
         match channel_type {
             ChannelType::Whatsapp => {
@@ -347,13 +395,6 @@ impl ChannelService for LiveChannelService {
             },
         }
 
-        let created_at = self
-            .store
-            .get(ct, account_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .map(|s| s.created_at)
-            .unwrap_or_else(unix_now);
         let now = unix_now();
         if let Err(e) = self
             .store
@@ -687,5 +728,71 @@ impl ChannelService for LiveChannelService {
             "denied": identifier,
             "type": channel_type.to_string()
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::merge_channel_config;
+
+    #[test]
+    fn merge_channel_config_preserves_omitted_fields() {
+        let existing = json!({
+            "dm_policy": "allowlist",
+            "reply_to_message": false,
+            "allowlist": ["alice"]
+        });
+        let patch = json!({
+            "dm_policy": "open"
+        });
+
+        let merged = merge_channel_config(Some(existing), patch);
+        assert_eq!(merged["dm_policy"], "open");
+        assert_eq!(merged["reply_to_message"], false);
+        assert_eq!(merged["allowlist"], json!(["alice"]));
+    }
+
+    #[test]
+    fn merge_channel_config_ignores_redacted_secret_placeholders() {
+        let existing = json!({
+            "token": "real-secret",
+            "webhook_secret": "real-webhook-secret"
+        });
+        let patch = json!({
+            "token": "[REDACTED]",
+            "webhook_secret": "[REDACTED]"
+        });
+
+        let merged = merge_channel_config(Some(existing), patch);
+        assert_eq!(merged["token"], "real-secret");
+        assert_eq!(merged["webhook_secret"], "real-webhook-secret");
+    }
+
+    #[test]
+    fn merge_channel_config_allows_explicit_replacements() {
+        let existing = json!({
+            "channel_overrides": {
+                "C123": {
+                    "model": "old-model",
+                    "model_provider": "anthropic"
+                }
+            }
+        });
+        let patch = json!({
+            "channel_overrides": {
+                "C123": {
+                    "model": "new-model"
+                }
+            }
+        });
+
+        let merged = merge_channel_config(Some(existing), patch);
+        assert_eq!(merged["channel_overrides"]["C123"]["model"], "new-model");
+        assert_eq!(
+            merged["channel_overrides"]["C123"]["model_provider"],
+            "anthropic"
+        );
     }
 }

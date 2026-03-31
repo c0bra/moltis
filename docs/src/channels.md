@@ -61,7 +61,16 @@ integrations (e.g. email, SMS).
 
 ## Setup
 
-Each channel is configured in `moltis.toml` under `[channels]`:
+Channels can be configured in two places:
+
+- In `moltis.toml` under `[channels]`, for file-managed setups
+- In the web UI under **Settings -> Channels**, which stores channel accounts in the internal `channels` table inside `data_dir()/moltis.db`
+
+The web UI does not write channel settings back into `moltis.toml`. It includes an advanced JSON config editor so channel-specific settings remain reachable even when a dedicated form field has not been added yet.
+
+`moltis.toml` and the web UI are both loaded at startup. If the same `(channel_type, account_id)` exists in both, the `moltis.toml` entry wins.
+
+Manual file configuration looks like this:
 
 ```toml
 [channels.telegram.my_bot]
@@ -93,7 +102,7 @@ For detailed configuration, see the per-channel pages:
 [Telegram](telegram.md), [Discord](discord.md), [Slack](slack.md),
 [Matrix](matrix.md), [WhatsApp](whatsapp.md).
 
-You can also use the web UI's **Channels** tab for guided setup with each platform.
+You can also use the web UI's **Channels** tab for guided setup with each platform. Web-added channels do not get written back into `moltis.toml`.
 
 ## Proactive Outbound Messaging
 
@@ -114,8 +123,7 @@ Example `send_message` tool call:
 }
 ```
 
-`account_id` is the configured channel account name from `moltis.toml`, and
-`to` is the destination chat, peer, or room identifier for that platform.
+`account_id` is the configured channel account name, either from `moltis.toml` or from a channel account stored through the web UI, and `to` is the destination chat, peer, or room identifier for that platform.
 
 ## Access Control
 

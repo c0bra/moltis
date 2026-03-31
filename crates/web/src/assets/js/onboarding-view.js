@@ -10,13 +10,18 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import {
 	addChannel,
 	buildTeamsEndpoint,
+	CHANNEL_STORAGE_NOTE,
 	defaultTeamsBaseUrl,
+	deriveMatrixAccountId,
 	fetchChannelStatus,
 	generateWebhookSecretHex,
+	MATRIX_DEFAULT_HOMESERVER,
 	MATRIX_DOCS_URL,
 	matrixCredentialLabel,
 	matrixCredentialPlaceholder,
 	normalizeMatrixAuthMode,
+	normalizeMatrixOtpCooldown,
+	parseChannelConfigPatch,
 	validateChannelFields,
 } from "./channel-utils.js";
 import { EmojiPicker } from "./emoji-picker.js";
@@ -87,6 +92,32 @@ function ErrorPanel({ message }) {
 	return html`<div role="alert" class="alert-error-text whitespace-pre-line">
 		<span class="text-[var(--error)] font-medium">${t("onboarding:errorPrefix")}</span> ${message}
 	</div>`;
+}
+
+function ChannelStorageNotice() {
+	return html`<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)]">
+		<span class="font-medium text-[var(--text-strong)]">Storage note.</span> ${CHANNEL_STORAGE_NOTE}
+	</div>`;
+}
+
+function AdvancedConfigPatchField({ value, onInput }) {
+	return html`<details class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3">
+		<summary class="cursor-pointer text-xs font-medium text-[var(--text-strong)]">Advanced Config JSON</summary>
+		<div class="mt-3 flex flex-col gap-2">
+			<div class="text-xs text-[var(--muted)]">
+				Optional JSON object merged on top of the form before save. Use this for channel-specific settings that do not have dedicated fields yet.
+			</div>
+			<div>
+				<label class="text-xs text-[var(--muted)] mb-1 block">Advanced config JSON patch (optional)</label>
+				<textarea
+					name="channel_advanced_config"
+					class="provider-key-input w-full min-h-[140px] font-mono text-xs"
+					value=${value}
+					onInput=${(e) => onInput(e.target.value)}
+					placeholder='{"reply_to_message": true}'></textarea>
+			</div>
+		</div>
+	</details>`;
 }
 
 function StepIndicator({ steps, current }) {
@@ -2263,6 +2294,7 @@ function TelegramForm({ onConnected, error, setError }) {
 	var [token, setToken] = useState("");
 	var [dmPolicy, setDmPolicy] = useState("allowlist");
 	var [allowlist, setAllowlist] = useState("");
+	var [advancedConfig, setAdvancedConfig] = useState("");
 	var [saving, setSaving] = useState(false);
 
 	function onSubmit(e) {
@@ -2272,6 +2304,11 @@ function TelegramForm({ onConnected, error, setError }) {
 			setError(v.error);
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfig);
+		if (!advancedPatch.ok) {
+			setError(advancedPatch.error);
+			return;
+		}
 		setError(null);
 		setSaving(true);
 		var allowlistEntries = allowlist
@@ -2279,12 +2316,14 @@ function TelegramForm({ onConnected, error, setError }) {
 			.split(/\n/)
 			.map((s) => s.trim())
 			.filter(Boolean);
-		addChannel("telegram", accountId.trim(), {
+		var config = {
 			token: token.trim(),
 			dm_policy: dmPolicy,
 			mention_mode: "mention",
 			allowlist: allowlistEntries,
-		}).then((res) => {
+		};
+		Object.assign(config, advancedPatch.value);
+		addChannel("telegram", accountId.trim(), config).then((res) => {
 			setSaving(false);
 			if (res?.ok) {
 				onConnected(accountId.trim(), "telegram");
@@ -2339,6 +2378,7 @@ function TelegramForm({ onConnected, error, setError }) {
 				placeholder="your_username" style="resize:vertical;font-family:var(--font-body);" />
 			<div class="text-xs text-[var(--muted)] mt-1">One username per line, without the @ sign. These users can DM your bot.</div>
 		</div>
+		<${AdvancedConfigPatchField} value=${advancedConfig} onInput=${setAdvancedConfig} />
 		${error && html`<${ErrorPanel} message=${error} />`}
 		<button type="submit" class="provider-btn" disabled=${saving}>${saving ? "Connecting\u2026" : "Connect Bot"}</button>
 	</form>`;
@@ -2350,6 +2390,7 @@ function TeamsForm({ onConnected, error, setError }) {
 	var [webhookSecret, setWebhookSecret] = useState("");
 	var [baseUrl, setBaseUrl] = useState(defaultTeamsBaseUrl());
 	var [bootstrapEndpoint, setBootstrapEndpoint] = useState("");
+	var [advancedConfig, setAdvancedConfig] = useState("");
 	var [saving, setSaving] = useState(false);
 
 	function onBootstrap() {
@@ -2386,6 +2427,11 @@ function TeamsForm({ onConnected, error, setError }) {
 			setError(v.error);
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfig);
+		if (!advancedPatch.ok) {
+			setError(advancedPatch.error);
+			return;
+		}
 		setError(null);
 		setSaving(true);
 		var config = {
@@ -2396,6 +2442,7 @@ function TeamsForm({ onConnected, error, setError }) {
 			allowlist: [],
 		};
 		if (webhookSecret.trim()) config.webhook_secret = webhookSecret.trim();
+		Object.assign(config, advancedPatch.value);
 		addChannel("msteams", appId.trim(), config).then((res) => {
 			setSaving(false);
 			if (res?.ok) {
@@ -2452,6 +2499,7 @@ function TeamsForm({ onConnected, error, setError }) {
 			<code class="text-xs block break-all">${bootstrapEndpoint}</code>
 		</div>`
 		}
+		<${AdvancedConfigPatchField} value=${advancedConfig} onInput=${setAdvancedConfig} />
 		${error && html`<${ErrorPanel} message=${error} />`}
 		<button type="submit" class="provider-btn" disabled=${saving}>${saving ? "Connecting\u2026" : "Connect Teams"}</button>
 	</form>`;
@@ -2475,6 +2523,7 @@ function DiscordForm({ onConnected, error, setError }) {
 	var [token, setToken] = useState("");
 	var [dmPolicy, setDmPolicy] = useState("allowlist");
 	var [allowlist, setAllowlist] = useState("");
+	var [advancedConfig, setAdvancedConfig] = useState("");
 	var [saving, setSaving] = useState(false);
 
 	function onSubmit(e) {
@@ -2484,6 +2533,11 @@ function DiscordForm({ onConnected, error, setError }) {
 			setError(v.error);
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfig);
+		if (!advancedPatch.ok) {
+			setError(advancedPatch.error);
+			return;
+		}
 		setError(null);
 		setSaving(true);
 		var allowlistEntries = allowlist
@@ -2491,12 +2545,14 @@ function DiscordForm({ onConnected, error, setError }) {
 			.split(/\n/)
 			.map((s) => s.trim())
 			.filter(Boolean);
-		addChannel("discord", accountId.trim(), {
+		var config = {
 			token: token.trim(),
 			dm_policy: dmPolicy,
 			mention_mode: "mention",
 			allowlist: allowlistEntries,
-		}).then((res) => {
+		};
+		Object.assign(config, advancedPatch.value);
+		addChannel("discord", accountId.trim(), config).then((res) => {
 			setSaving(false);
 			if (res?.ok) {
 				onConnected(accountId.trim(), "discord");
@@ -2563,14 +2619,14 @@ function DiscordForm({ onConnected, error, setError }) {
 				placeholder="your_username" style="resize:vertical;font-family:var(--font-body);" />
 			<div class="text-xs text-[var(--muted)] mt-1">One username per line. These users can DM your bot.</div>
 		</div>
+		<${AdvancedConfigPatchField} value=${advancedConfig} onInput=${setAdvancedConfig} />
 		${error && html`<${ErrorPanel} message=${error} />`}
 		<button type="submit" class="provider-btn" disabled=${saving}>${saving ? "Connecting\u2026" : "Connect Bot"}</button>
 	</form>`;
 }
 
 function MatrixForm({ onConnected, error, setError }) {
-	var [accountId, setAccountId] = useState("");
-	var [homeserver, setHomeserver] = useState("");
+	var [homeserver, setHomeserver] = useState(MATRIX_DEFAULT_HOMESERVER);
 	var [authMode, setAuthMode] = useState("access_token");
 	var [userId, setUserId] = useState("");
 	var [credential, setCredential] = useState("");
@@ -2579,8 +2635,11 @@ function MatrixForm({ onConnected, error, setError }) {
 	var [roomPolicy, setRoomPolicy] = useState("allowlist");
 	var [mentionMode, setMentionMode] = useState("mention");
 	var [autoJoin, setAutoJoin] = useState("always");
+	var [otpSelfApproval, setOtpSelfApproval] = useState(true);
+	var [otpCooldown, setOtpCooldown] = useState("300");
 	var [userAllowlist, setUserAllowlist] = useState("");
 	var [roomAllowlist, setRoomAllowlist] = useState("");
+	var [advancedConfig, setAdvancedConfig] = useState("");
 	var [saving, setSaving] = useState(false);
 
 	function splitLines(value) {
@@ -2593,6 +2652,7 @@ function MatrixForm({ onConnected, error, setError }) {
 
 	function onSubmit(e) {
 		e.preventDefault();
+		var accountId = deriveMatrixAccountId({ userId, homeserver });
 		var v = validateChannelFields("matrix", accountId, credential, {
 			matrixAuthMode: authMode,
 			matrixUserId: userId,
@@ -2605,6 +2665,11 @@ function MatrixForm({ onConnected, error, setError }) {
 			setError("Homeserver URL is required.");
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfig);
+		if (!advancedPatch.ok) {
+			setError(advancedPatch.error);
+			return;
+		}
 		setError(null);
 		setSaving(true);
 		var config = {
@@ -2613,6 +2678,8 @@ function MatrixForm({ onConnected, error, setError }) {
 			room_policy: roomPolicy,
 			mention_mode: mentionMode,
 			auto_join: autoJoin,
+			otp_self_approval: otpSelfApproval,
+			otp_cooldown_secs: normalizeMatrixOtpCooldown(otpCooldown),
 			user_allowlist: splitLines(userAllowlist),
 			room_allowlist: splitLines(roomAllowlist),
 		};
@@ -2623,6 +2690,7 @@ function MatrixForm({ onConnected, error, setError }) {
 		}
 		if (userId.trim()) config.user_id = userId.trim();
 		if (deviceDisplayName.trim()) config.device_display_name = deviceDisplayName.trim();
+		Object.assign(config, advancedPatch.value);
 		addChannel("matrix", accountId.trim(), config).then((res) => {
 			setSaving(false);
 			if (res?.ok) {
@@ -2636,25 +2704,17 @@ function MatrixForm({ onConnected, error, setError }) {
 	return html`<form onSubmit=${onSubmit} class="flex flex-col gap-3">
 		<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-1">
 			<span class="font-medium text-[var(--text-strong)]">Connect a Matrix bot user</span>
-			<span>1. Choose any local account ID below for Moltis</span>
+			<span>1. Leave the homeserver as <span class="font-mono">${MATRIX_DEFAULT_HOMESERVER}</span> for matrix.org accounts</span>
 			<span>2. Use either an access token or password login, Matrix user ID is only required for password auth</span>
-			<span>3. Choose invite auto-join behavior, then allowlist the DMs and rooms Moltis should answer in</span>
-		</div>
-		<div>
-			<label class="text-xs text-[var(--muted)] mb-1 block">Account ID</label>
-			<input type="text" class="provider-key-input w-full"
-				value=${accountId} onInput=${(e) => setAccountId(e.target.value)}
-				placeholder="e.g. my-matrix-bot"
-				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
-				name="matrix_account_id" autofocus />
+			<span>3. Moltis generates the local account ID automatically from the Matrix user or homeserver</span>
 		</div>
 		<div>
 			<label class="text-xs text-[var(--muted)] mb-1 block">Homeserver URL</label>
 			<input type="text" class="provider-key-input w-full"
 				value=${homeserver} onInput=${(e) => setHomeserver(e.target.value)}
-				placeholder="https://matrix.example.com"
+				placeholder=${MATRIX_DEFAULT_HOMESERVER}
 				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
-				name="matrix_homeserver" />
+				name="matrix_homeserver" autofocus />
 		</div>
 		<div>
 			<label class="text-xs text-[var(--muted)] mb-1 block">Authentication</label>
@@ -2729,6 +2789,20 @@ function MatrixForm({ onConnected, error, setError }) {
 			</select>
 		</div>
 		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Unknown DM Approval</label>
+			<select class="provider-key-input w-full cursor-pointer" value=${otpSelfApproval ? "on" : "off"} onChange=${(e) => setOtpSelfApproval(e.target.value !== "off")}>
+				<option value="on">PIN challenge enabled (recommended)</option>
+				<option value="off">Reject unknown DMs without a PIN</option>
+			</select>
+		</div>
+		<div>
+			<label class="text-xs text-[var(--muted)] mb-1 block">PIN Cooldown Seconds</label>
+			<input type="number" min="1" step="1" class="provider-key-input w-full"
+				value=${otpCooldown} onInput=${(e) => setOtpCooldown(e.target.value)}
+				name="matrix_otp_cooldown_secs" />
+			<div class="text-xs text-[var(--muted)] mt-1">With DM policy on allowlist, unknown users get a 6-digit PIN challenge by default.</div>
+		</div>
+		<div>
 			<label class="text-xs text-[var(--muted)] mb-1 block">DM Allowlist (Matrix user IDs)</label>
 			<textarea class="provider-key-input w-full" rows="2"
 				value=${userAllowlist} onInput=${(e) => setUserAllowlist(e.target.value)}
@@ -2740,6 +2814,7 @@ function MatrixForm({ onConnected, error, setError }) {
 				value=${roomAllowlist} onInput=${(e) => setRoomAllowlist(e.target.value)}
 				placeholder="!room:example.com" style="resize:vertical;font-family:var(--font-body);" />
 		</div>
+		<${AdvancedConfigPatchField} value=${advancedConfig} onInput=${setAdvancedConfig} />
 		${error && html`<${ErrorPanel} message=${error} />`}
 		<button type="submit" class="provider-btn" disabled=${saving}>${saving ? "Connecting\u2026" : "Connect Matrix"}</button>
 	</form>`;
@@ -2749,6 +2824,7 @@ function WhatsAppForm({ onConnected, error, setError }) {
 	var [accountId, setAccountId] = useState("");
 	var [dmPolicy, setDmPolicy] = useState("allowlist");
 	var [allowlist, setAllowlist] = useState("");
+	var [advancedConfig, setAdvancedConfig] = useState("");
 	var [saving, setSaving] = useState(false);
 	var [pairingStarted, setPairingStarted] = useState(false);
 	var [qrData, setQrData] = useState(null);
@@ -2788,6 +2864,11 @@ function WhatsAppForm({ onConnected, error, setError }) {
 			setError("Account ID is required.");
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfig);
+		if (!advancedPatch.ok) {
+			setError(advancedPatch.error);
+			return;
+		}
 		setError(null);
 		setSaving(true);
 		setQrData(null);
@@ -2812,10 +2893,12 @@ function WhatsAppForm({ onConnected, error, setError }) {
 			.split(/\n/)
 			.map((s) => s.trim())
 			.filter(Boolean);
-		addChannel("whatsapp", id, {
+		var config = {
 			dm_policy: dmPolicy,
 			allowlist: allowlistEntries,
-		}).then((res) => {
+		};
+		Object.assign(config, advancedPatch.value);
+		addChannel("whatsapp", id, config).then((res) => {
 			setSaving(false);
 			if (res?.ok) {
 				setPairingStarted(true);
@@ -2883,6 +2966,7 @@ function WhatsAppForm({ onConnected, error, setError }) {
 				placeholder="phone number or identifier" style="resize:vertical;font-family:var(--font-body);" />
 			<div class="text-xs text-[var(--muted)] mt-1">One per line. Only needed if DM policy is "Allowlist only".</div>
 		</div>
+		<${AdvancedConfigPatchField} value=${advancedConfig} onInput=${setAdvancedConfig} />
 		${error && html`<${ErrorPanel} message=${error} />`}
 		<button type="submit" class="provider-btn" disabled=${saving}>${saving ? "Starting\u2026" : "Start Pairing"}</button>
 	</form>`;
@@ -2960,6 +3044,7 @@ function ChannelStep({ onNext, onBack }) {
 	return html`<div class="flex flex-col gap-4">
 		<h2 class="text-lg font-medium text-[var(--text-strong)]">Connect a Channel</h2>
 		<p class="text-xs text-[var(--muted)] leading-relaxed">Connect a messaging channel so you can chat from your phone or team workspace. You can set this up later in Channels.</p>
+		<${ChannelStorageNotice} />
 		${phase === "select" && html`<${ChannelTypeSelector} onSelect=${onSelectType} offered=${offered} />`}
 		${phase === "form" && selectedType === "telegram" && html`<${TelegramForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
 		${phase === "form" && selectedType === "whatsapp" && html`<${WhatsAppForm} onConnected=${onConnected} error=${error} setError=${setError} />`}

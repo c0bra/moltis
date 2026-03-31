@@ -309,18 +309,22 @@ test.describe("Settings navigation", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
-	test("channels add matrix allows omitting the user id", async ({ page }) => {
+	test("channels add matrix defaults to matrix.org and auto-generates an account id", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await navigateAndWait(page, "/settings/channels");
 		await waitForWsConnected(page);
+		await expect(
+			page.getByText("stored in Moltis's internal database (data_dir()/moltis.db)", { exact: false }),
+		).toBeVisible();
 
 		const addButton = page.getByRole("button", { name: "Connect Matrix", exact: true });
 		await expect(addButton).toBeVisible();
 		await addButton.click();
 
 		await expect(page.getByRole("heading", { name: "Connect Matrix", exact: true })).toBeVisible();
-		const accountInput = page.locator('input[data-field="accountId"]');
-		await expect(accountInput).toBeVisible();
+		await expect(page.locator('input[data-field="accountId"]')).toHaveCount(0);
+		await expect(page.locator('input[data-field="homeserver"]')).toHaveValue("https://matrix.org");
+		await expect(page.locator('input[data-field="homeserver"]')).toHaveAttribute("placeholder", "https://matrix.org");
 		await expect(page.getByText("Settings -> Help & About -> Advanced -> Access Token")).toBeVisible();
 		await expect(page.getByRole("link", { name: "Matrix setup docs", exact: true })).toHaveAttribute(
 			"href",
@@ -337,7 +341,7 @@ test.describe("Settings navigation", () => {
 			const prefix = appUrl.slice(0, markerIdx);
 			const state = await import(`${prefix}js/state.js`);
 			const wsOpen = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
-			window.__matrixSettingsAddConfig = null;
+			window.__matrixSettingsAddRequest = null;
 			state.setConnected(true);
 			state.setWs({
 				readyState: wsOpen,
@@ -346,7 +350,7 @@ test.describe("Settings navigation", () => {
 					const resolver = state.pending[req.id];
 					if (!resolver) return;
 					if (req.method === "channels.add") {
-						window.__matrixSettingsAddConfig = req.params?.config || null;
+						window.__matrixSettingsAddRequest = req.params || null;
 						resolver({ ok: true, payload: {} });
 					} else if (req.method === "channels.status") {
 						resolver({ ok: true, payload: { channels: [] } });
@@ -358,9 +362,12 @@ test.describe("Settings navigation", () => {
 			});
 		});
 
-		await accountInput.fill("e2e-matrix");
 		await page.locator('input[data-field="homeserver"]').fill("https://matrix.example.com");
 		await page.locator('input[data-field="credential"]').fill("syt_test_token");
+		await page.getByText("Advanced Config JSON", { exact: true }).click();
+		await page
+			.locator('textarea[data-field="advancedConfigPatch"]')
+			.fill('{"reply_to_message":true,"stream_mode":"off"}');
 		await page.evaluate(() => {
 			const submitButton = Array.from(document.querySelectorAll(".modal-box button.provider-btn")).find(
 				(button) => button.textContent?.trim() === "Connect Matrix",
@@ -372,15 +379,20 @@ test.describe("Settings navigation", () => {
 			submitButton.click();
 		});
 
-		await expect.poll(() => page.evaluate(() => window.__matrixSettingsAddConfig)).not.toBeNull();
+		await expect.poll(() => page.evaluate(() => window.__matrixSettingsAddRequest)).not.toBeNull();
 
-		const sentConfig = await page.evaluate(() => window.__matrixSettingsAddConfig);
-		expect(sentConfig).toMatchObject({
+		const sentRequest = await page.evaluate(() => window.__matrixSettingsAddRequest);
+		expect(sentRequest.account_id).toMatch(/^matrix-example-com-[a-z0-9]{6}$/);
+		expect(sentRequest.config).toMatchObject({
 			homeserver: "https://matrix.example.com",
 			access_token: "syt_test_token",
 			auto_join: "always",
+			otp_self_approval: true,
+			otp_cooldown_secs: 300,
+			reply_to_message: true,
+			stream_mode: "off",
 		});
-		expect(sentConfig).not.toHaveProperty("user_id");
+		expect(sentRequest.config).not.toHaveProperty("user_id");
 		expect(pageErrors).toEqual([]);
 	});
 
@@ -405,7 +417,7 @@ test.describe("Settings navigation", () => {
 			const prefix = appUrl.slice(0, markerIdx);
 			const state = await import(`${prefix}js/state.js`);
 			const wsOpen = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
-			window.__matrixSettingsAddConfig = null;
+			window.__matrixSettingsAddRequest = null;
 			state.setConnected(true);
 			state.setWs({
 				readyState: wsOpen,
@@ -414,7 +426,7 @@ test.describe("Settings navigation", () => {
 					const resolver = state.pending[req.id];
 					if (!resolver) return;
 					if (req.method === "channels.add") {
-						window.__matrixSettingsAddConfig = req.params?.config || null;
+						window.__matrixSettingsAddRequest = req.params || null;
 						resolver({ ok: true, payload: {} });
 					} else if (req.method === "channels.status") {
 						resolver({ ok: true, payload: { channels: [] } });
@@ -426,7 +438,6 @@ test.describe("Settings navigation", () => {
 			});
 		});
 
-		await page.locator('input[data-field="accountId"]').fill("e2e-matrix-password");
 		await page.locator('input[data-field="homeserver"]').fill("https://matrix.example.com");
 		await page.locator('select[data-field="authMode"]').selectOption("password");
 		await page.locator('input[data-field="userId"]').fill("@bot:example.com");
@@ -443,16 +454,19 @@ test.describe("Settings navigation", () => {
 			submitButton.click();
 		});
 
-		await expect.poll(() => page.evaluate(() => window.__matrixSettingsAddConfig)).not.toBeNull();
+		await expect.poll(() => page.evaluate(() => window.__matrixSettingsAddRequest)).not.toBeNull();
 
-		const sentConfig = await page.evaluate(() => window.__matrixSettingsAddConfig);
-		expect(sentConfig).toMatchObject({
+		const sentRequest = await page.evaluate(() => window.__matrixSettingsAddRequest);
+		expect(sentRequest.account_id).toBe("bot-example-com");
+		expect(sentRequest.config).toMatchObject({
 			homeserver: "https://matrix.example.com",
 			user_id: "@bot:example.com",
 			password: "correct horse battery staple",
 			auto_join: "allowlist",
+			otp_self_approval: true,
+			otp_cooldown_secs: 300,
 		});
-		expect(sentConfig).not.toHaveProperty("access_token");
+		expect(sentRequest.config).not.toHaveProperty("access_token");
 		expect(pageErrors).toEqual([]);
 	});
 

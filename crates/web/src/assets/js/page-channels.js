@@ -7,13 +7,18 @@ import { useEffect, useState } from "preact/hooks";
 import {
 	addChannel,
 	buildTeamsEndpoint,
+	CHANNEL_STORAGE_NOTE,
 	defaultTeamsBaseUrl,
+	deriveMatrixAccountId,
 	fetchChannelStatus,
 	generateWebhookSecretHex,
+	MATRIX_DEFAULT_HOMESERVER,
 	MATRIX_DOCS_URL,
 	matrixCredentialLabel,
 	matrixCredentialPlaceholder,
 	normalizeMatrixAuthMode,
+	normalizeMatrixOtpCooldown,
+	parseChannelConfigPatch,
 	validateChannelFields,
 } from "./channel-utils.js";
 import { onEvent } from "./events.js";
@@ -97,6 +102,49 @@ function ConnectionModeHint({ type }) {
 		<span class="tier-badge">${MODE_LABELS[desc.capabilities.inbound_mode]}</span>
 		<span>${hint}</span>
 	</div>`;
+}
+
+function ChannelStorageNotice({ compact = false }) {
+	return html`<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-xs text-[var(--muted)] ${compact ? "" : "max-w-3xl"}">
+		<span class="font-medium text-[var(--text-strong)]">Storage note.</span> ${CHANNEL_STORAGE_NOTE}
+	</div>`;
+}
+
+function prettyConfigJson(value) {
+	try {
+		return JSON.stringify(value || {}, null, 2);
+	} catch (_error) {
+		return "{}";
+	}
+}
+
+function AdvancedConfigPatchField({ value, onInput, currentConfig = null }) {
+	return html`<details class="channel-card">
+		<summary class="cursor-pointer text-xs font-medium text-[var(--text-strong)]">Advanced Config JSON</summary>
+		<div class="mt-2 flex flex-col gap-3">
+			<div class="text-xs text-[var(--muted)]">
+				Optional JSON object merged on top of the form before save. Use this for channel-specific settings that do not have dedicated fields yet.
+			</div>
+			${
+				currentConfig &&
+				html`<div class="flex flex-col gap-1">
+					<label class="text-xs text-[var(--muted)]">Current stored config (read-only)</label>
+					<textarea class="channel-input min-h-[160px] font-mono text-xs" readOnly value=${prettyConfigJson(currentConfig)} />
+				</div>`
+			}
+			<div class="flex flex-col gap-1">
+				<label class="text-xs text-[var(--muted)]">Advanced config JSON patch (optional)</label>
+				<textarea
+					data-field="advancedConfigPatch"
+					class="channel-input min-h-[140px] font-mono text-xs"
+					value=${value}
+					onInput=${(e) => {
+						onInput(e.target.value);
+					}}
+					placeholder='{"reply_to_message": true}'></textarea>
+			</div>
+		</div>
+	</details>`;
 }
 
 function senderSelectionKey(ch) {
@@ -437,6 +485,7 @@ function AddTelegramModal() {
 	var addModel = useSignal("");
 	var allowlistItems = useSignal([]);
 	var accountDraft = useSignal("");
+	var advancedConfigPatch = useSignal("");
 
 	function onSubmit(e) {
 		e.preventDefault();
@@ -446,6 +495,11 @@ function AddTelegramModal() {
 		var v = validateChannelFields("telegram", accountId, credential);
 		if (!v.valid) {
 			error.value = v.error;
+			return;
+		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
 			return;
 		}
 		error.value = "";
@@ -461,6 +515,7 @@ function AddTelegramModal() {
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+		Object.assign(addConfig, advancedPatch.value);
 		addChannel("telegram", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -468,6 +523,7 @@ function AddTelegramModal() {
 				addModel.value = "";
 				allowlistItems.value = [];
 				accountDraft.value = "";
+				advancedConfigPatch.value = "";
 				loadChannels();
 			} else {
 				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
@@ -508,6 +564,9 @@ function AddTelegramModal() {
 	      </div>`
 				}
 	      <${SharedChannelFields} addModel=${addModel} allowlistItems=${allowlistItems} />
+	      <${AdvancedConfigPatchField} value=${advancedConfigPatch.value} onInput=${(value) => {
+					advancedConfigPatch.value = value;
+				}} />
 	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
 	        ${saving.value ? "Connecting\u2026" : "Connect Telegram"}
@@ -526,6 +585,7 @@ function AddTeamsModal() {
 	var webhookSecret = useSignal("");
 	var baseUrlDraft = useSignal(defaultTeamsBaseUrl());
 	var bootstrapEndpoint = useSignal("");
+	var advancedConfigPatch = useSignal("");
 
 	function refreshBootstrapEndpoint() {
 		if (!bootstrapEndpoint.value) return;
@@ -574,6 +634,11 @@ function AddTeamsModal() {
 			error.value = v.error;
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
+			return;
+		}
 		error.value = "";
 		saving.value = true;
 		var addConfig = {
@@ -589,6 +654,7 @@ function AddTeamsModal() {
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+		Object.assign(addConfig, advancedPatch.value);
 		addChannel("msteams", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -599,6 +665,7 @@ function AddTeamsModal() {
 				webhookSecret.value = "";
 				baseUrlDraft.value = defaultTeamsBaseUrl();
 				bootstrapEndpoint.value = "";
+				advancedConfigPatch.value = "";
 				loadChannels();
 			} else {
 				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
@@ -667,6 +734,9 @@ function AddTeamsModal() {
 					}
 	      </div>
 	      <${SharedChannelFields} addModel=${addModel} allowlistItems=${allowlistItems} />
+	      <${AdvancedConfigPatchField} value=${advancedConfigPatch.value} onInput=${(value) => {
+					advancedConfigPatch.value = value;
+				}} />
 	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
 	        ${saving.value ? "Connecting\u2026" : "Connect Microsoft Teams"}
@@ -697,6 +767,7 @@ function AddDiscordModal() {
 	var allowlistItems = useSignal([]);
 	var accountDraft = useSignal("");
 	var tokenDraft = useSignal("");
+	var advancedConfigPatch = useSignal("");
 
 	function onSubmit(e) {
 		e.preventDefault();
@@ -706,6 +777,11 @@ function AddDiscordModal() {
 		var v = validateChannelFields("discord", accountId, credential);
 		if (!v.valid) {
 			error.value = v.error;
+			return;
+		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
 			return;
 		}
 		error.value = "";
@@ -721,6 +797,7 @@ function AddDiscordModal() {
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+		Object.assign(addConfig, advancedPatch.value);
 		addChannel("discord", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -729,6 +806,7 @@ function AddDiscordModal() {
 				allowlistItems.value = [];
 				accountDraft.value = "";
 				tokenDraft.value = "";
+				advancedConfigPatch.value = "";
 				loadChannels();
 			} else {
 				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
@@ -778,6 +856,9 @@ function AddDiscordModal() {
 	      </div>`
 				}
 	      <${SharedChannelFields} addModel=${addModel} allowlistItems=${allowlistItems} />
+	      <${AdvancedConfigPatchField} value=${advancedConfigPatch.value} onInput=${(value) => {
+					advancedConfigPatch.value = value;
+				}} />
 	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
 	        ${saving.value ? "Connecting\u2026" : "Connect Discord"}
@@ -798,6 +879,7 @@ function AddSlackModal() {
 	var appTokenDraft = useSignal("");
 	var connectionMode = useSignal("socket_mode");
 	var signingSecretDraft = useSignal("");
+	var advancedConfigPatch = useSignal("");
 
 	function onSubmit(e) {
 		e.preventDefault();
@@ -820,6 +902,11 @@ function AddSlackModal() {
 			error.value = "Signing Secret is required for Events API mode.";
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
+			return;
+		}
 		error.value = "";
 		saving.value = true;
 		var addConfig = {
@@ -840,6 +927,7 @@ function AddSlackModal() {
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+		Object.assign(addConfig, advancedPatch.value);
 		addChannel("slack", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -852,6 +940,7 @@ function AddSlackModal() {
 				appTokenDraft.value = "";
 				signingSecretDraft.value = "";
 				connectionMode.value = "socket_mode";
+				advancedConfigPatch.value = "";
 				loadChannels();
 			} else {
 				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect Slack.";
@@ -934,6 +1023,9 @@ function AddSlackModal() {
 	        onChange=${(items) => {
 						channelAllowlistItems.value = items;
 					}} />
+	      <${AdvancedConfigPatchField} value=${advancedConfigPatch.value} onInput=${(value) => {
+					advancedConfigPatch.value = value;
+				}} />
 	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
 	        ${saving.value ? "Connecting\u2026" : "Connect Slack"}
@@ -949,21 +1041,23 @@ function AddMatrixModal() {
 	var addModel = useSignal("");
 	var userAllowlistItems = useSignal([]);
 	var roomAllowlistItems = useSignal([]);
-	var accountDraft = useSignal("");
-	var homeserverDraft = useSignal("");
+	var homeserverDraft = useSignal(MATRIX_DEFAULT_HOMESERVER);
 	var authModeDraft = useSignal("access_token");
 	var userIdDraft = useSignal("");
 	var credentialDraft = useSignal("");
 	var deviceDisplayNameDraft = useSignal("");
+	var otpSelfApprovalDraft = useSignal(true);
+	var otpCooldownDraft = useSignal("300");
+	var advancedConfigPatch = useSignal("");
 
 	function onSubmit(e) {
 		e.preventDefault();
 		var form = e.target.closest(".channel-form");
-		var accountId = accountDraft.value.trim();
 		var authMode = normalizeMatrixAuthMode(authModeDraft.value);
 		var credential = credentialDraft.value.trim();
 		var homeserver = homeserverDraft.value.trim();
 		var userId = userIdDraft.value.trim();
+		var accountId = deriveMatrixAccountId({ userId, homeserver });
 		var v = validateChannelFields("matrix", accountId, credential, {
 			matrixAuthMode: authMode,
 			matrixUserId: userId,
@@ -976,6 +1070,11 @@ function AddMatrixModal() {
 			error.value = "Homeserver URL is required.";
 			return;
 		}
+		var advancedPatch = parseChannelConfigPatch(advancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
+			return;
+		}
 		error.value = "";
 		saving.value = true;
 		var addConfig = {
@@ -986,6 +1085,8 @@ function AddMatrixModal() {
 			auto_join: form.querySelector("[data-field=autoJoin]").value,
 			user_allowlist: userAllowlistItems.value,
 			room_allowlist: roomAllowlistItems.value,
+			otp_self_approval: otpSelfApprovalDraft.value,
+			otp_cooldown_secs: normalizeMatrixOtpCooldown(otpCooldownDraft.value),
 		};
 		if (authMode === "password") {
 			addConfig.password = credential;
@@ -999,6 +1100,7 @@ function AddMatrixModal() {
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+		Object.assign(addConfig, advancedPatch.value);
 		addChannel("matrix", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -1006,12 +1108,14 @@ function AddMatrixModal() {
 				addModel.value = "";
 				userAllowlistItems.value = [];
 				roomAllowlistItems.value = [];
-				accountDraft.value = "";
-				homeserverDraft.value = "";
+				homeserverDraft.value = MATRIX_DEFAULT_HOMESERVER;
 				authModeDraft.value = "access_token";
 				userIdDraft.value = "";
 				credentialDraft.value = "";
 				deviceDisplayNameDraft.value = "";
+				otpSelfApprovalDraft.value = true;
+				otpCooldownDraft.value = "300";
+				advancedConfigPatch.value = "";
 				loadChannels();
 			} else {
 				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect Matrix.";
@@ -1032,26 +1136,21 @@ function AddMatrixModal() {
 	      <div class="channel-card">
 	        <div>
 	          <span class="text-xs font-medium text-[var(--text-strong)]">Connect a Matrix bot user</span>
-	          <div class="text-xs text-[var(--muted)] channel-help">1. Choose any local account ID for Moltis below</div>
+	          <div class="text-xs text-[var(--muted)] channel-help">1. Leave the homeserver as <span class="font-mono">${MATRIX_DEFAULT_HOMESERVER}</span> for matrix.org accounts</div>
 	          <div class="text-xs text-[var(--muted)]">2. Use either an access token or password login, Matrix user ID is only required for password auth</div>
-	          <div class="text-xs text-[var(--muted)]">3. Choose how invites are auto-joined, then allowlist the DMs and rooms Moltis should respond to</div>
+	          <div class="text-xs text-[var(--muted)]">3. Moltis generates the local account ID automatically from the Matrix user or homeserver</div>
 	        </div>
 	      </div>
 	      <${ConnectionModeHint} type="matrix" />
-	      <label class="text-xs text-[var(--muted)]">Account ID</label>
-	      <input data-field="accountId" type="text" placeholder="e.g. my-matrix-bot"
-	        value=${accountDraft.value}
-	        onInput=${(e) => {
-						accountDraft.value = e.target.value;
-					}}
-	        class="channel-input" />
 	      <label class="text-xs text-[var(--muted)]">Homeserver URL</label>
-	      <input data-field="homeserver" type="text" placeholder="https://matrix.example.com"
+	      <input data-field="homeserver" type="text" placeholder=${MATRIX_DEFAULT_HOMESERVER}
 	        value=${homeserverDraft.value}
 	        onInput=${(e) => {
 						homeserverDraft.value = e.target.value;
 					}}
-	        	        class="channel-input" />
+	        class="channel-input"
+	        autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+	        autofocus />
 	      <label class="text-xs text-[var(--muted)]">Authentication</label>
 	      <select data-field="authMode" class="channel-select"
 	        value=${authModeDraft.value}
@@ -1116,6 +1215,22 @@ function AddMatrixModal() {
 	        <option value="allowlist">Only when inviter or room is allowlisted</option>
 	        <option value="off">Do not auto-join</option>
 	      </select>
+	      <label class="text-xs text-[var(--muted)]">Unknown DM Approval</label>
+	      <select data-field="otpSelfApproval" class="channel-select"
+	        value=${otpSelfApprovalDraft.value ? "on" : "off"}
+	        onChange=${(e) => {
+						otpSelfApprovalDraft.value = e.target.value !== "off";
+					}}>
+	        <option value="on">PIN challenge enabled (recommended)</option>
+	        <option value="off">Reject unknown DMs without a PIN</option>
+	      </select>
+	      <label class="text-xs text-[var(--muted)]">PIN Cooldown Seconds</label>
+	      <input data-field="otpCooldown" type="number" min="1" step="1" class="channel-input"
+	        value=${otpCooldownDraft.value}
+	        onInput=${(e) => {
+						otpCooldownDraft.value = e.target.value;
+					}} />
+	      <div class="text-xs text-[var(--muted)]">With DM policy on allowlist, unknown users get a 6-digit PIN challenge by default.</div>
 	      <label class="text-xs text-[var(--muted)]">Default Model</label>
 	      <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
 	        onChange=${(v) => {
@@ -1129,6 +1244,9 @@ function AddMatrixModal() {
 	      <label class="text-xs text-[var(--muted)]">Room Allowlist (room IDs or aliases)</label>
 	      <${AllowlistInput} value=${roomAllowlistItems.value} onChange=${(items) => {
 					roomAllowlistItems.value = items;
+				}} />
+	      <${AdvancedConfigPatchField} value=${advancedConfigPatch.value} onInput=${(value) => {
+					advancedConfigPatch.value = value;
 				}} />
 	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
@@ -1186,12 +1304,19 @@ function AddWhatsAppModal() {
 	var pairingStarted = useSignal(false);
 	var allowlistItems = useSignal([]);
 	var accountDraft = useSignal("");
+	var advancedConfigPatch = useSignal("");
 
 	function onStartPairing(e) {
 		e.preventDefault();
 		var accountId = accountDraft.value.trim();
 		if (!accountId) {
 			error.value = "Account ID is required.";
+			return;
+		}
+		var form = e.target.closest(".channel-form");
+		var advancedPatch = parseChannelConfigPatch(advancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
 			return;
 		}
 		error.value = "";
@@ -1202,7 +1327,7 @@ function AddWhatsAppModal() {
 		waPairingAccountId.value = accountId;
 
 		var addConfig = {
-			dm_policy: "open",
+			dm_policy: form.querySelector("[data-field=dmPolicy]")?.value || "open",
 			allowlist: allowlistItems.value,
 		};
 		if (addModel.value) {
@@ -1210,6 +1335,7 @@ function AddWhatsAppModal() {
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+		Object.assign(addConfig, advancedPatch.value);
 		addChannel("whatsapp", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -1229,6 +1355,7 @@ function AddWhatsAppModal() {
 		waPairingAccountId.value = null;
 		allowlistItems.value = [];
 		accountDraft.value = "";
+		advancedConfigPatch.value = "";
 		loadChannels();
 	}
 
@@ -1284,6 +1411,9 @@ function AddWhatsAppModal() {
         <${AllowlistInput} value=${allowlistItems.value} onChange=${(v) => {
 					allowlistItems.value = v;
 				}} />
+        <${AdvancedConfigPatchField} value=${advancedConfigPatch.value} onInput=${(value) => {
+					advancedConfigPatch.value = value;
+				}} />
         ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
         <button class="provider-btn" onClick=${onStartPairing} disabled=${saving.value}>
           ${saving.value ? "Starting\u2026" : "Start Pairing"}
@@ -1306,6 +1436,9 @@ function EditChannelModal() {
 	var editWebhookSecret = useSignal("");
 	var editMatrixAuthMode = useSignal("access_token");
 	var editMatrixDeviceDisplayName = useSignal("");
+	var editMatrixOtpSelfApproval = useSignal(true);
+	var editMatrixOtpCooldown = useSignal("300");
+	var editAdvancedConfigPatch = useSignal("");
 	useEffect(() => {
 		editModel.value = ch?.config?.model || "";
 		allowlistItems.value = ch?.config?.allowlist || ch?.config?.user_allowlist || [];
@@ -1314,6 +1447,9 @@ function EditChannelModal() {
 		editWebhookSecret.value = ch?.config?.webhook_secret || "";
 		editMatrixAuthMode.value = ch?.config?.password ? "password" : "access_token";
 		editMatrixDeviceDisplayName.value = ch?.config?.device_display_name || "";
+		editMatrixOtpSelfApproval.value = ch?.config?.otp_self_approval !== false;
+		editMatrixOtpCooldown.value = String(ch?.config?.otp_cooldown_secs || 300);
+		editAdvancedConfigPatch.value = "";
 	}, [ch]);
 	if (!ch) return null;
 	var cfg = ch.config || {};
@@ -1364,6 +1500,8 @@ function EditChannelModal() {
 			updateConfig.room_policy = form.querySelector("[data-field=roomPolicy]")?.value || cfg.room_policy || "allowlist";
 			updateConfig.auto_join = form.querySelector("[data-field=autoJoin]")?.value || cfg.auto_join || "always";
 			updateConfig.room_allowlist = roomAllowlistItems.value;
+			updateConfig.otp_self_approval = editMatrixOtpSelfApproval.value;
+			updateConfig.otp_cooldown_secs = normalizeMatrixOtpCooldown(editMatrixOtpCooldown.value);
 		}
 		if (!isWhatsApp) {
 			updateConfig.mention_mode = form.querySelector("[data-field=mentionMode]")?.value || "mention";
@@ -1376,12 +1514,19 @@ function EditChannelModal() {
 	function onSave(e) {
 		e.preventDefault();
 		var form = e.target.closest(".channel-form");
+		var advancedPatch = parseChannelConfigPatch(editAdvancedConfigPatch.value);
+		if (!advancedPatch.ok) {
+			error.value = advancedPatch.error;
+			return;
+		}
 		error.value = "";
 		saving.value = true;
+		var updateConfig = buildUpdateConfig(form);
+		Object.assign(updateConfig, advancedPatch.value);
 		sendRpc("channels.update", {
 			type: channelType(ch.type),
 			account_id: ch.account_id,
-			config: buildUpdateConfig(form),
+			config: updateConfig,
 		}).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
@@ -1406,9 +1551,9 @@ function EditChannelModal() {
 	      ${isTelegram && ch.account_id && html`<a href="https://t.me/${ch.account_id}" target="_blank" class="text-xs text-[var(--accent)] underline">t.me/${ch.account_id}</a>`}
 	      ${
 					isTeams &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">App Password (optional: leave blank to keep existing)</label>
-				        <input type="password" class="channel-input" value=${editCredential.value}
+				        <input type="password" class="channel-input w-full" value=${editCredential.value}
 				          onInput=${(e) => {
 										editCredential.value = e.target.value;
 									}} />
@@ -1416,9 +1561,9 @@ function EditChannelModal() {
 				}
 	      ${
 					isTeams &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">Webhook Secret</label>
-				        <input type="text" class="channel-input" value=${editWebhookSecret.value}
+				        <input type="text" class="channel-input w-full" value=${editWebhookSecret.value}
 				          onInput=${(e) => {
 										editWebhookSecret.value = e.target.value;
 									}} />
@@ -1426,9 +1571,9 @@ function EditChannelModal() {
 				}
 	      ${
 					isDiscord &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">Bot Token (optional: leave blank to keep existing)</label>
-				        <input type="password" class="channel-input" value=${editCredential.value}
+				        <input type="password" class="channel-input w-full" value=${editCredential.value}
 				          onInput=${(e) => {
 										editCredential.value = e.target.value;
 									}} />
@@ -1436,9 +1581,9 @@ function EditChannelModal() {
 				}
 	      ${
 					isMatrix &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">Authentication</label>
-				        <select class="channel-select" value=${editMatrixAuthMode.value}
+				        <select class="channel-select w-full" value=${editMatrixAuthMode.value}
 				          onChange=${(e) => {
 										editMatrixAuthMode.value = normalizeMatrixAuthMode(e.target.value);
 									}}>
@@ -1449,23 +1594,23 @@ function EditChannelModal() {
 				}
 	      ${
 					isMatrix &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">Homeserver URL</label>
-				        <input data-field="homeserver" type="text" class="channel-input" defaultValue=${cfg.homeserver || ""} />
+				        <input data-field="homeserver" type="text" class="channel-input w-full" defaultValue=${cfg.homeserver || ""} />
 				      </div>`
 				}
 	      ${
 					isMatrix &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">Matrix User ID${editMatrixAuthMode.value === "password" ? " (required)" : " (optional)"}</label>
-				        <input data-field="userId" type="text" class="channel-input" defaultValue=${cfg.user_id || ""} />
+				        <input data-field="userId" type="text" class="channel-input w-full" defaultValue=${cfg.user_id || ""} />
 				      </div>`
 				}
 	      ${
 					isMatrix &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">${matrixCredentialLabel(editMatrixAuthMode.value)} (optional: leave blank to keep existing)</label>
-				        <input type="password" class="channel-input" value=${editCredential.value}
+				        <input type="password" class="channel-input w-full" value=${editCredential.value}
 				          onInput=${(e) => {
 										editCredential.value = e.target.value;
 									}}
@@ -1474,9 +1619,9 @@ function EditChannelModal() {
 				}
 	      ${
 					isMatrix &&
-					html`<div>
+					html`<div class="flex flex-col gap-1">
 				        <label class="text-xs text-[var(--muted)]">Device Display Name (optional)</label>
-				        <input type="text" class="channel-input" value=${editMatrixDeviceDisplayName.value}
+				        <input type="text" class="channel-input w-full" value=${editMatrixDeviceDisplayName.value}
 				          onInput=${(e) => {
 										editMatrixDeviceDisplayName.value = e.target.value;
 									}} />
@@ -1503,6 +1648,21 @@ function EditChannelModal() {
       ${
 				isMatrix &&
 				html`
+        <label class="text-xs text-[var(--muted)]">Unknown DM Approval</label>
+        <select class="channel-select" value=${editMatrixOtpSelfApproval.value ? "on" : "off"}
+          onChange=${(e) => {
+						editMatrixOtpSelfApproval.value = e.target.value !== "off";
+					}}>
+          <option value="on">PIN challenge enabled (recommended)</option>
+          <option value="off">Reject unknown DMs without a PIN</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">PIN Cooldown Seconds</label>
+        <input type="number" min="1" step="1" class="channel-input"
+          value=${editMatrixOtpCooldown.value}
+          onInput=${(e) => {
+						editMatrixOtpCooldown.value = e.target.value;
+					}} />
+        <div class="text-xs text-[var(--muted)]">With DM policy on allowlist, unknown users get a 6-digit PIN challenge by default.</div>
         <label class="text-xs text-[var(--muted)]">Room Policy</label>
         <select data-field="roomPolicy" class="channel-select" value=${cfg.room_policy || "allowlist"}>
           <option value="allowlist">Room allowlist only</option>
@@ -1536,6 +1696,11 @@ function EditChannelModal() {
 				}} />
       `
 			}
+	      <${AdvancedConfigPatchField} value=${editAdvancedConfigPatch.value}
+	        onInput=${(value) => {
+						editAdvancedConfigPatch.value = value;
+					}}
+	        currentConfig=${cfg} />
       ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn"
 	        onClick=${onSave} disabled=${saving.value}>
@@ -1615,6 +1780,7 @@ function ChannelsPage() {
         </div>
         ${activeTab.value === "channels" && channels.value.length > 0 && html`<${ConnectButtons} />`}
       </div>
+      ${activeTab.value === "channels" && html`<${ChannelStorageNotice} />`}
       ${activeTab.value === "channels" ? html`<${ChannelsTab} />` : html`<${SendersTab} />`}
     </div>
     <${AddTelegramModal} />

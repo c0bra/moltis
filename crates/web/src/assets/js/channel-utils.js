@@ -5,6 +5,9 @@
 import { sendRpc } from "./helpers.js";
 
 export var MATRIX_DOCS_URL = "https://docs.moltis.org/matrix.html";
+export var MATRIX_DEFAULT_HOMESERVER = "https://matrix.org";
+export var CHANNEL_STORAGE_NOTE =
+	"Channels added or edited in the web UI are stored in Moltis's internal database (data_dir()/moltis.db). They are not written back to moltis.toml.";
 
 /**
  * Validate required channel fields before submission.
@@ -51,6 +54,86 @@ export function matrixCredentialPlaceholder(authMode) {
 
 export function matrixCredentialError(authMode) {
 	return normalizeMatrixAuthMode(authMode) === "password" ? "Password is required." : "Access token is required.";
+}
+
+function randomSuffix(length) {
+	if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+		var bytes = new Uint8Array(length);
+		window.crypto.getRandomValues(bytes);
+		return Array.from(bytes, (byte) => (byte % 36).toString(36)).join("");
+	}
+	var value = "";
+	while (value.length < length) {
+		value += Math.floor(Math.random() * 36).toString(36);
+	}
+	return value.slice(0, length);
+}
+
+function slugifyMatrixAccountPart(value) {
+	return String(value || "")
+		.toLowerCase()
+		.trim()
+		.replace(/^@/, "")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "");
+}
+
+function matrixHomeserverHost(homeserver) {
+	var raw = String(homeserver || "").trim();
+	if (!raw) return "";
+	if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+	try {
+		return new URL(raw).hostname;
+	} catch (_error) {
+		return "";
+	}
+}
+
+/**
+ * Generate a local Matrix account identifier for Moltis.
+ * Prefer the Matrix user ID when present, otherwise derive from homeserver.
+ * @param {{ userId?: string, homeserver?: string }} options
+ * @returns {string}
+ */
+export function deriveMatrixAccountId(options = {}) {
+	var userSlug = slugifyMatrixAccountPart(options.userId);
+	if (userSlug) return userSlug.slice(0, 80);
+
+	var hostSlug = slugifyMatrixAccountPart(matrixHomeserverHost(options.homeserver));
+	var base = hostSlug || "matrix";
+	return `${base}-${randomSuffix(6)}`.slice(0, 80);
+}
+
+/**
+ * Normalize Matrix OTP cooldown input to a positive integer.
+ * @param {string | number | null | undefined} value
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+export function normalizeMatrixOtpCooldown(value, fallback = 300) {
+	var parsed = Number.parseInt(String(value || ""), 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Parse an optional advanced channel config JSON object.
+ * @param {string | null | undefined} text
+ * @returns {{ ok: true, value: Record<string, unknown> } | { ok: false, error: string }}
+ */
+export function parseChannelConfigPatch(text) {
+	var raw = String(text || "").trim();
+	if (!raw) return { ok: true, value: {} };
+	try {
+		var value = JSON.parse(raw);
+		if (!(value && typeof value === "object" && !Array.isArray(value))) {
+			return { ok: false, error: "Advanced config must be a JSON object." };
+		}
+		return { ok: true, value };
+	} catch (error) {
+		var message = error instanceof Error ? error.message : String(error || "unknown error");
+		return { ok: false, error: `Advanced config JSON is invalid: ${message}` };
+	}
 }
 
 /**
