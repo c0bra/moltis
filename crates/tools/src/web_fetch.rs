@@ -76,7 +76,7 @@ impl WebFetchTool {
             #[cfg(feature = "firecrawl")]
             firecrawl_api_key: None,
             #[cfg(feature = "firecrawl")]
-            firecrawl_base_url: "https://api.firecrawl.dev".into(),
+            firecrawl_base_url: crate::firecrawl::DEFAULT_BASE_URL.into(),
             #[cfg(feature = "firecrawl")]
             firecrawl_only_main_content: true,
             #[cfg(feature = "firecrawl")]
@@ -102,12 +102,18 @@ impl WebFetchTool {
         if config.enabled && config.web_fetch_fallback {
             self.firecrawl_api_key = crate::firecrawl::resolve_api_key(config);
             self.firecrawl_base_url = if config.base_url.trim().is_empty() {
-                "https://api.firecrawl.dev".into()
+                crate::firecrawl::DEFAULT_BASE_URL.into()
             } else {
                 config.base_url.clone()
             };
             self.firecrawl_only_main_content = config.only_main_content;
-            self.firecrawl_fallback = true;
+            self.firecrawl_fallback = self.firecrawl_api_key.is_some();
+            if !self.firecrawl_fallback {
+                tracing::warn!(
+                    "firecrawl web_fetch_fallback is enabled but no API key found; \
+                     set tools.web.firecrawl.api_key or FIRECRAWL_API_KEY env var"
+                );
+            }
         }
         self
     }
@@ -348,7 +354,7 @@ fn html_to_text(html: &str) -> String {
 }
 
 /// Truncate a string at a char boundary, not mid-UTF-8.
-fn truncate_at_char_boundary(s: &str, max: usize) -> String {
+pub(crate) fn truncate_at_char_boundary(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.into();
     }
@@ -451,7 +457,7 @@ mod tests {
             #[cfg(feature = "firecrawl")]
             firecrawl_api_key: None,
             #[cfg(feature = "firecrawl")]
-            firecrawl_base_url: "https://api.firecrawl.dev".into(),
+            firecrawl_base_url: crate::firecrawl::DEFAULT_BASE_URL.into(),
             #[cfg(feature = "firecrawl")]
             firecrawl_only_main_content: true,
             #[cfg(feature = "firecrawl")]

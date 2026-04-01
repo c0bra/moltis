@@ -187,7 +187,7 @@ impl WebSearchTool {
                 }
                 Some(Self::new(
                     SearchProvider::Firecrawl {
-                        base_url: "https://api.firecrawl.dev".into(),
+                        base_url: crate::firecrawl::DEFAULT_BASE_URL.into(),
                     },
                     Secret::new(api_key),
                     config.max_results,

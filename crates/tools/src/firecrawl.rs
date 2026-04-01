@@ -25,7 +25,7 @@ use {
 };
 
 /// Default Firecrawl API base URL.
-const DEFAULT_BASE_URL: &str = "https://api.firecrawl.dev";
+pub(crate) const DEFAULT_BASE_URL: &str = "https://api.firecrawl.dev";
 
 /// Default maximum characters returned from a scrape.
 const DEFAULT_MAX_CHARS: usize = 50_000;
@@ -437,16 +437,17 @@ fn extract_search_results(payload: &serde_json::Value) -> Vec<serde_json::Value>
 }
 
 /// Minimal markdown-to-text stripping.
+///
+/// Removes heading markers (`#`), bold/italic markers (`**`, `__`, `*`).
+/// Preserves underscores in identifiers and URLs (e.g. `snake_case`,
+/// `https://example.com/some_path`).
 fn strip_markdown(md: &str) -> String {
     let mut out = String::with_capacity(md.len());
     for line in md.lines() {
         let trimmed = line.trim_start_matches('#').trim_start();
-        // Strip bold/italic markers.
-        let cleaned: String = trimmed
-            .replace("**", "")
-            .replace("__", "")
-            .replace('*', "")
-            .replace('_', " ");
+        // Strip bold/italic markers.  Leave lone underscores intact so
+        // URLs and identifiers (snake_case) are not mangled.
+        let cleaned: String = trimmed.replace("**", "").replace("__", "").replace('*', "");
         out.push_str(&cleaned);
         out.push('\n');
     }
@@ -455,14 +456,7 @@ fn strip_markdown(md: &str) -> String {
 
 /// Truncate a string at a char boundary, not mid-UTF-8.
 fn truncate_at_char_boundary(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.into();
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
+    crate::web_fetch::truncate_at_char_boundary(s, max)
 }
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -541,6 +535,20 @@ mod tests {
         assert!(text.contains("Heading 2"));
         assert!(!text.contains('#'));
         assert!(!text.contains("**"));
+    }
+
+    #[test]
+    fn test_strip_markdown_preserves_underscores() {
+        let md = "Use `snake_case_var` and visit https://api.example.com/some_endpoint";
+        let text = strip_markdown(md);
+        assert!(
+            text.contains("snake_case_var"),
+            "underscores in identifiers must be preserved"
+        );
+        assert!(
+            text.contains("some_endpoint"),
+            "underscores in URLs must be preserved"
+        );
     }
 
     #[test]

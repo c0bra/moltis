@@ -1120,17 +1120,20 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
         }
     }
 
-    // Firecrawl as search provider requires an API key.
+    // Firecrawl as search provider requires an API key.  We cannot check
+    // the FIRECRAWL_API_KEY env var here (static validation), so only emit
+    // an Info-level hint when neither config path supplies a key.
     if config.tools.web.search.provider == crate::schema::SearchProvider::Firecrawl
         && config.tools.web.firecrawl.api_key.is_none()
+        && config.tools.web.search.api_key.is_none()
         && !config.tools.web.search.duckduckgo_fallback
     {
         diagnostics.push(Diagnostic {
-            severity: Severity::Warning,
+            severity: Severity::Info,
             category: "unknown-provider",
             path: "tools.web.search.provider".into(),
-            message: "search provider is 'firecrawl' but no firecrawl API key is configured \
-                      (set tools.web.firecrawl.api_key or FIRECRAWL_API_KEY env var)"
+            message: "search provider is 'firecrawl' but no API key found in config \
+                      (may be supplied at runtime via FIRECRAWL_API_KEY env var)"
                 .into(),
         });
     }
