@@ -163,9 +163,9 @@ var sections = [
 		icon: html`<span class="icon icon-ssh"></span>`,
 	},
 	{
-		id: "tailscale",
-		label: "Tailscale",
-		icon: html`<span class="icon icon-tailscale"></span>`,
+		id: "remote-access",
+		label: "Remote Access",
+		icon: html`<span class="icon icon-share"></span>`,
 	},
 	{
 		id: "network-audit",
@@ -3346,25 +3346,25 @@ function ConfigSection() {
 	</div>`;
 }
 
-// ── Tailscale section ─────────────────────────────────────────
+// ── Remote access section ────────────────────────────────────
 
-/** Populate a text node with plain text + clickable URLs. */
-function setLinkedText(el, text) {
-	el.textContent = "";
-	var parts = String(text).split(/(https?:\/\/[^\s]+)/g);
-	for (var p of parts) {
-		if (/^https?:\/\//.test(p)) {
-			var a = document.createElement("a");
-			a.href = p;
-			a.target = "_blank";
-			a.rel = "noopener";
-			a.style.cssText = "color:inherit;text-decoration:underline;word-break:break-all;";
-			a.textContent = p;
-			el.appendChild(a);
-		} else {
-			el.appendChild(document.createTextNode(p));
-		}
-	}
+function renderLinkedText(text) {
+	return String(text || "")
+		.split(/(https?:\/\/[^\s]+)/g)
+		.filter(Boolean)
+		.map((part, index) =>
+			/^https?:\/\//.test(part)
+				? html`<a
+					key=${index}
+					href=${part}
+					target="_blank"
+					rel="noopener"
+					class="underline break-all"
+				>
+					${part}
+				</a>`
+				: part,
+		);
 }
 
 /** Clone a hidden element from index.html by ID. */
@@ -3377,14 +3377,24 @@ function cloneHidden(id) {
 	return clone;
 }
 
-function TailscaleSection() {
-	var ref = useRef(null);
+function RemoteAccessSection() {
 	var [tsStatus, setTsStatus] = useState(null);
 	var [tsError, setTsError] = useState(null);
 	var [tsWarning, setTsWarning] = useState(null);
 	var [tsLoading, setTsLoading] = useState(true);
 	var [configuring, setConfiguring] = useState(false);
 	var [configuringMode, setConfiguringMode] = useState(null);
+	var [ngStatus, setNgStatus] = useState(null);
+	var [ngError, setNgError] = useState(null);
+	var [ngLoading, setNgLoading] = useState(true);
+	var [ngSaving, setNgSaving] = useState(false);
+	var [ngMsg, setNgMsg] = useState(null);
+	var [ngForm, setNgForm] = useState({
+		enabled: false,
+		authtoken: "",
+		clearAuthtoken: false,
+		domain: "",
+	});
 	var [authReady, setAuthReady] = useState(false);
 
 	function fetchTsStatus() {
@@ -3420,6 +3430,41 @@ function TailscaleSection() {
 			});
 	}
 
+	function fetchNgrokStatus() {
+		setNgLoading(true);
+		rerender();
+		fetch("/api/ngrok/status")
+			.then((r) => {
+				var ct = r.headers.get("content-type") || "";
+				if (r.status === 404 || !ct.includes("application/json")) {
+					setNgError("ngrok feature is not enabled. Rebuild with --features ngrok.");
+					setNgStatus(null);
+					setNgLoading(false);
+					rerender();
+					return null;
+				}
+				return r.json();
+			})
+			.then((data) => {
+				if (!data) return;
+				setNgStatus(data);
+				setNgError(data.error || null);
+				setNgLoading(false);
+				setNgForm({
+					enabled: Boolean(data.enabled),
+					authtoken: "",
+					clearAuthtoken: false,
+					domain: data.domain || "",
+				});
+				rerender();
+			})
+			.catch((e) => {
+				setNgError(e.message);
+				setNgLoading(false);
+				rerender();
+			});
+	}
+
 	function setMode(mode) {
 		setConfiguring(true);
 		setTsError(null);
@@ -3451,8 +3496,92 @@ function TailscaleSection() {
 			});
 	}
 
+	function persistNgrokConfig(nextForm, successMessage) {
+		setNgSaving(true);
+		setNgError(null);
+		setNgMsg(null);
+		rerender();
+
+		fetch("/api/ngrok/config", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				enabled: nextForm.enabled,
+				authtoken: nextForm.authtoken,
+				clear_authtoken: nextForm.clearAuthtoken,
+				domain: nextForm.domain,
+			}),
+		})
+			.then((r) =>
+				r
+					.json()
+					.catch(() => ({}))
+					.then((data) => ({ ok: r.ok, data })),
+			)
+			.then(({ ok, data }) => {
+				setNgSaving(false);
+				if (!ok || data.error) {
+					setNgError(data.error);
+				} else {
+					setNgMsg(successMessage);
+					if (data.status) {
+						setNgStatus(data.status);
+						setNgForm({
+							enabled: Boolean(data.status.enabled),
+							authtoken: "",
+							clearAuthtoken: false,
+							domain: data.status.domain || "",
+						});
+					} else {
+						fetchNgrokStatus();
+					}
+				}
+				rerender();
+			})
+			.catch((e) => {
+				setNgSaving(false);
+				setNgError(e.message);
+				rerender();
+			});
+	}
+
+	function saveNgrokConfig(e) {
+		e.preventDefault();
+		persistNgrokConfig(ngForm, "ngrok settings applied.");
+	}
+
+	function toggleNgrokEnabled() {
+		var nextForm = {
+			...ngForm,
+			enabled: !ngForm.enabled,
+		};
+		setNgForm(nextForm);
+		persistNgrokConfig(nextForm, `ngrok ${nextForm.enabled ? "enabled" : "disabled"}.`);
+	}
+
+	function toggleNgrokTokenDeletion() {
+		if (ngForm.clearAuthtoken) {
+			setNgForm({
+				...ngForm,
+				clearAuthtoken: false,
+			});
+			return;
+		}
+
+		if (!window.confirm("Delete the current ngrok token from config when you save?")) {
+			return;
+		}
+
+		setNgForm({
+			...ngForm,
+			authtoken: "",
+			clearAuthtoken: true,
+		});
+	}
+
 	useEffect(() => {
 		fetchTsStatus();
+		fetchNgrokStatus();
 		fetch("/api/auth/status")
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d) => {
@@ -3466,172 +3595,403 @@ function TailscaleSection() {
 			});
 	}, []);
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: DOM manipulation with multiple conditionals
-	function renderInstalledBar(container, status) {
-		var bar = cloneHidden("ts-installed-bar");
-		if (!bar) return;
-		var verEl = bar.querySelector("[data-ts-version]");
-		if (verEl) verEl.textContent = status.version ? `v${status.version.split("-")[0]}` : "";
-		var tailnetWrap = bar.querySelector("[data-ts-tailnet-wrap]");
-		if (tailnetWrap && status.tailnet) {
-			tailnetWrap.style.display = "";
-			tailnetWrap.querySelector("[data-ts-tailnet]").textContent = status.tailnet;
-		}
-		var accountWrap = bar.querySelector("[data-ts-account-wrap]");
-		if (accountWrap && status.login_name) {
-			accountWrap.style.display = "";
-			accountWrap.querySelector("[data-ts-account]").textContent = status.login_name;
-		}
-		var ipWrap = bar.querySelector("[data-ts-ip-wrap]");
-		if (ipWrap && status.tailscale_ip) {
-			ipWrap.style.display = "";
-			ipWrap.querySelector("[data-ts-ip]").textContent = status.tailscale_ip;
-		}
-		container.appendChild(bar);
-	}
-
-	function createModeBtn(m, currentMode) {
-		var btn = document.createElement("button");
-		btn.textContent = m;
-		btn.style.fontWeight = "500";
-		var active = currentMode === m && !configuring;
-		var base = "text-xs border px-3 py-1.5 rounded-md cursor-pointer transition-colors";
-		var state = active
+	function renderTailscaleModeButton(mode, currentMode) {
+		var active = currentMode === mode && !configuring;
+		var classes = active
 			? "ts-mode-active"
 			: "text-[var(--muted)] border-[var(--border)] bg-transparent hover:text-[var(--text)] hover:border-[var(--border-strong)]";
-		btn.className = `${base} ${state}${configuringMode === m ? " ts-mode-configuring" : ""}`;
-		var funnelBlocked = m === "funnel" && !authReady;
-		btn.disabled = configuring || funnelBlocked;
-		if (funnelBlocked) {
-			btn.style.opacity = "0.4";
-			btn.style.cursor = "default";
-			btn.style.pointerEvents = "none";
-		} else {
-			btn.addEventListener("click", setMode.bind(null, m));
-		}
-		if (configuringMode === m) {
-			var spinner = document.createElement("span");
-			spinner.className = "ts-spinner";
-			btn.prepend(spinner);
-		}
-		return btn;
+		return html`<button
+			type="button"
+			class=${`text-xs border px-3 py-1.5 rounded-md cursor-pointer transition-colors font-medium ${classes}${
+				configuringMode === mode ? " ts-mode-configuring" : ""
+			}`}
+			disabled=${configuring}
+			onClick=${() => setMode(mode)}
+		>
+			${configuringMode === mode ? html`<span class="ts-spinner"></span>` : null}
+			${mode}
+		</button>`;
 	}
 
-	function renderModeButtons(container, status) {
-		var modes = ["off", "serve", "funnel"];
-		var currentMode = status?.mode || "off";
-		var section = cloneHidden("ts-mode-section");
-		if (!section) return currentMode;
-		var btnContainer = section.querySelector("[data-ts-mode-btns]");
-		for (var m of modes) btnContainer.appendChild(createModeBtn(m, currentMode));
-		var cfgMsg = section.querySelector("[data-ts-configuring]");
-		if (configuring && cfgMsg) {
-			cfgMsg.style.display = "";
-			cfgMsg.textContent = `Configuring tailscale ${configuringMode}\u2026 This can take up to 10 seconds.`;
-		}
-		container.appendChild(section);
-		var warn = cloneHidden("ts-funnel-security-warning");
-		if (warn) container.appendChild(warn);
-		if (!authReady) {
-			var authBtn = cloneHidden("ts-funnel-auth-btn");
-			if (authBtn) container.appendChild(authBtn);
-		}
-		return currentMode;
-	}
+	function renderTailscaleCard() {
+		var currentMode = tsStatus?.mode || "off";
+		var tsVaultBlocked = tsError === "vault is sealed";
+		return html`<section class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-4 flex flex-col gap-4">
+			<div class="flex flex-col gap-1">
+				<h3 class="text-base font-medium text-[var(--text-strong)]">Tailscale</h3>
+				<p class="text-xs text-[var(--muted)] leading-relaxed">
+					Expose the gateway via Tailscale Serve (tailnet-only HTTPS) or Funnel (public HTTPS). The
+					gateway stays bound to localhost while Tailscale proxies traffic to it.
+				</p>
+			</div>
 
-	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: DOM manipulation with multiple conditionals
-	function renderHostnameAndUrl(container, currentMode) {
-		if (tsStatus?.hostname) {
-			var hn = cloneHidden("ts-hostname");
-			if (hn) {
-				hn.querySelector("[data-ts-hostname-value]").textContent = tsStatus.hostname;
-				var hnLink = hn.querySelector("[data-ts-hostname-link]");
-				if (hnLink && tsStatus.url && currentMode !== "off") {
-					hnLink.href = tsStatus.url;
-					hnLink.classList.remove("pointer-events-none", "text-[var(--text)]");
-					hnLink.classList.add("text-[var(--accent)]");
+			${
+				tsLoading
+					? html`<div class="text-xs text-[var(--muted)]">Loading\u2026 this can take a few seconds.</div>`
+					: null
+			}
+			${
+				tsStatus?.installed
+					? html`<div class="info-bar">
+						<span class="info-field">
+							<span class="status-dot connected"></span>
+							<span class="info-label">Installed</span>
+							${tsStatus.version ? html`<span class="info-version">v${tsStatus.version.split("-")[0]}</span>` : null}
+						</span>
+						${
+							tsStatus.tailnet
+								? html`<span class="info-field">
+									<span class="info-label">Tailnet:</span>
+									<span class="info-value-strong">${tsStatus.tailnet}</span>
+								</span>`
+								: null
+						}
+						${
+							tsStatus.login_name
+								? html`<span class="info-field">
+									<span class="info-label">Account:</span>
+									<span class="info-value">${tsStatus.login_name}</span>
+								</span>`
+								: null
+						}
+						${
+							tsStatus.tailscale_ip
+								? html`<span class="info-field">
+									<span class="info-label">IP:</span>
+									<span class="info-value-mono">${tsStatus.tailscale_ip}</span>
+								</span>`
+								: null
+						}
+					</div>`
+					: null
+			}
+				${
+					tsError
+						? html`<div class="settings-alert-error whitespace-pre-line max-w-form">
+							<span class="icon icon-lg icon-warn-triangle shrink-0 mt-0.5"></span>
+							<span>${renderLinkedText(tsError)}</span>
+						</div>`
+						: null
 				}
-				container.appendChild(hn);
+				${
+					tsVaultBlocked
+						? html`<button
+							type="button"
+							class="provider-btn self-start"
+							onClick=${() => navigate(settingsPath("vault"))}
+						>
+							Unlock in Encryption settings
+						</button>`
+						: null
+				}
+				${tsWarning ? html`<div class="alert-warning-text max-w-form">${tsWarning}</div>` : null}
+
+			${
+				tsStatus?.installed === false
+					? html`<div class="info-bar" style="justify-content:center;flex-direction:column;gap:12px;text-align:center">
+						<p class="text-sm text-[var(--text)]">
+							The <code class="font-mono text-sm">tailscale</code> CLI was not found on this machine.
+						</p>
+						<div class="flex items-center justify-center gap-2 flex-wrap">
+							<a
+								href="https://tailscale.com/download"
+								target="_blank"
+								rel="noopener"
+								class="provider-btn"
+								style="display:inline-block;text-decoration:none"
+							>
+								Install Tailscale
+							</a>
+							<button type="button" class="provider-btn provider-btn-secondary" onClick=${fetchTsStatus}>
+								Re-check
+							</button>
+						</div>
+					</div>`
+					: null
 			}
-		}
-		if (tsStatus?.url && currentMode !== "off") {
-			var urlEl = cloneHidden("ts-url");
-			if (urlEl) {
-				var link = urlEl.querySelector("[data-ts-url-link]");
-				link.href = tsStatus.url;
-				link.textContent = tsStatus.url;
-				container.appendChild(urlEl);
+
+			${
+				!tsLoading && tsStatus?.installed !== false
+					? html`<div class="flex flex-col gap-4">
+						${
+							tsStatus?.tailscale_up === false
+								? html`<div class="alert-warning-text max-w-form">
+									<span class="alert-label-warn">Warning:</span>
+									Tailscale is not running. Start it with <code class="font-mono">tailscale up</code> or
+									open the Tailscale app.
+								</div>`
+								: null
+						}
+
+						<div class="max-w-form flex flex-col gap-2">
+							<h4 class="text-sm font-medium text-[var(--text-strong)]">Mode</h4>
+							<div class="flex gap-2 flex-wrap">
+								${["off", "serve", "funnel"].map((mode) => renderTailscaleModeButton(mode, currentMode))}
+							</div>
+							${
+								configuring
+									? html`<div class="text-xs text-[var(--muted)]">
+										Configuring tailscale ${configuringMode}\u2026 This can take up to 10 seconds.
+									</div>`
+									: null
+							}
+						</div>
+
+						<div class="alert-warning-text max-w-form">
+							<span class="alert-label-warn">Warning:</span>${" "}
+							Enabling Funnel exposes moltis to the public internet. This code has not been security-audited.
+							Use at your own risk.
+						</div>
+						${
+							authReady
+								? null
+								: html`<div class="flex flex-col gap-2 max-w-form">
+									<div class="alert-warning-text">
+										<span class="alert-label-warn">Warning:</span>
+										Funnel can be enabled now, but remote visitors will see the setup-required page until
+										authentication is configured.
+									</div>
+									<button
+										type="button"
+										class="provider-btn self-start"
+										onClick=${() => navigate(settingsPath("security"))}
+									>
+										Set up authentication
+									</button>
+								</div>`
+						}
+
+						${
+							tsStatus?.hostname
+								? html`<div class="max-w-form">
+									<h4 class="text-sm font-medium text-[var(--text-strong)] mb-1">Hostname</h4>
+									${
+										tsStatus.url && currentMode !== "off"
+											? html`<a
+												href=${tsStatus.url}
+												target="_blank"
+												rel="noopener"
+												class="font-mono text-sm text-[var(--accent)] no-underline"
+											>
+												${tsStatus.hostname}
+											</a>`
+											: html`<div class="font-mono text-sm">${tsStatus.hostname}</div>`
+									}
+								</div>`
+								: null
+						}
+						${
+							tsStatus?.url && currentMode !== "off"
+								? html`<div class="max-w-form">
+									<h4 class="text-sm font-medium text-[var(--text-strong)] mb-1">URL</h4>
+									<a
+										href=${tsStatus.url}
+										target="_blank"
+										rel="noopener"
+										class="font-mono text-sm text-[var(--accent)] no-underline break-all"
+									>
+										${tsStatus.url}
+									</a>
+								</div>`
+								: null
+						}
+						${
+							currentMode === "funnel"
+								? html`<div class="alert-warning-text max-w-form">
+									<span class="alert-label-warn">Warning:</span>
+									Funnel exposes your gateway to the public internet. Make sure password authentication is
+									configured.
+								</div>`
+								: null
+						}
+					</div>`
+					: null
 			}
-		}
+		</section>`;
 	}
 
-	function renderInstalledState(container) {
-		if (tsStatus?.tailscale_up === false) {
-			var warn = cloneHidden("ts-not-running");
-			if (warn) container.appendChild(warn);
-		}
-		var currentMode = renderModeButtons(container, tsStatus);
-		renderHostnameAndUrl(container, currentMode);
-		if (currentMode === "funnel") {
-			var fw = cloneHidden("ts-funnel-warning");
-			if (fw) container.appendChild(fw);
-		}
+	function renderNgrokCard() {
+		var authSourceLabel =
+			ngStatus?.authtoken_source === "config"
+				? "Stored in config"
+				: ngStatus?.authtoken_source === "env"
+					? "Using NGROK_AUTHTOKEN from the environment"
+					: "No authtoken configured yet";
+		var ngVaultBlocked = ngError === "vault is sealed";
+
+		return html`<section class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-4 flex flex-col gap-4">
+			<div class="flex flex-col gap-1">
+				<h3 class="text-base font-medium text-[var(--text-strong)]">ngrok</h3>
+				<p class="text-xs text-[var(--muted)] leading-relaxed">
+					Create a public HTTPS endpoint without installing an external binary. Changes apply
+					immediately.
+				</p>
+			</div>
+
+			${
+				ngLoading
+					? html`<div class="text-xs text-[var(--muted)]">Loading\u2026 this can take a few seconds.</div>`
+					: null
+			}
+				${
+					ngError
+						? html`<div class="settings-alert-error whitespace-pre-line max-w-form">
+							<span class="icon icon-lg icon-warn-triangle shrink-0 mt-0.5"></span>
+							<span>${renderLinkedText(ngError)}</span>
+						</div>`
+						: null
+				}
+				${
+					ngVaultBlocked
+						? html`<button
+							type="button"
+							class="provider-btn self-start"
+							onClick=${() => navigate(settingsPath("vault"))}
+						>
+							Unlock in Encryption settings
+						</button>`
+						: null
+				}
+
+				${
+					ngLoading || ngError
+						? null
+						: html`<form class="flex flex-col gap-4" onSubmit=${saveNgrokConfig}>
+							<div class="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 flex items-center justify-between gap-3">
+								<div>
+									<div class="text-sm font-medium text-[var(--text-strong)]">
+										ngrok is ${ngForm.enabled ? "enabled" : "disabled"}
+									</div>
+									<div class="text-xs text-[var(--muted)]">
+										Public HTTPS endpoint for demos, shared testing, and team access.
+									</div>
+								</div>
+								<button
+									type="button"
+									class="provider-btn"
+									disabled=${ngSaving}
+									onClick=${toggleNgrokEnabled}
+								>
+									${ngSaving ? "Saving\u2026" : ngForm.enabled ? "Disable ngrok" : "Enable ngrok"}
+								</button>
+							</div>
+
+						<div class="flex flex-col gap-1">
+							<label class="text-sm font-medium text-[var(--text-strong)]" for="ngrok-authtoken">
+								Authtoken
+							</label>
+							<input
+								id="ngrok-authtoken"
+								type="password"
+								class="w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+								placeholder=${ngStatus?.authtoken_source ? "Leave blank to keep the current token" : "Paste your ngrok authtoken"}
+								value=${ngForm.authtoken}
+								onInput=${(e) => setNgForm({ ...ngForm, authtoken: e.currentTarget.value })}
+							/>
+							<div class="text-xs text-[var(--muted)]">${authSourceLabel}</div>
+							<div class="text-xs text-[var(--muted)]">
+								Create or copy an authtoken from${" "}
+								<a
+									href="https://dashboard.ngrok.com/get-started/your-authtoken"
+									target="_blank"
+									rel="noopener"
+									class="text-[var(--accent)] no-underline hover:underline"
+								>
+									ngrok dashboard
+								</a>.
+							</div>
+							${
+								ngStatus?.authtoken_source === "config"
+									? html`<div class="flex flex-col gap-1">
+										<button
+											type="button"
+											class="text-xs text-[var(--accent)] self-start bg-transparent border-0 p-0 cursor-pointer hover:underline"
+											onClick=${toggleNgrokTokenDeletion}
+										>
+											${ngForm.clearAuthtoken ? "Keep current token" : "Delete current token"}
+										</button>
+										${
+											ngForm.clearAuthtoken
+												? html`<div class="text-xs text-[var(--muted)]">
+													The saved config token will be deleted when you save.
+												</div>`
+												: null
+										}
+									</div>`
+									: null
+							}
+						</div>
+
+						<div class="flex flex-col gap-1">
+							<label class="text-sm font-medium text-[var(--text-strong)]" for="ngrok-domain">
+								Reserved domain
+							</label>
+							<input
+								id="ngrok-domain"
+								type="text"
+								class="w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+								placeholder="team-gateway.ngrok.app"
+								value=${ngForm.domain}
+								onInput=${(e) => setNgForm({ ...ngForm, domain: e.currentTarget.value })}
+							/>
+							<div class="text-xs text-[var(--muted)]">
+								Optional. Use a reserved domain if you want a stable passkey origin across restarts.
+							</div>
+						</div>
+
+						${
+							ngStatus?.public_url
+								? html`<div class="flex flex-col gap-1">
+									<h4 class="text-sm font-medium text-[var(--text-strong)]">Active public URL</h4>
+									<a
+										href=${ngStatus.public_url}
+										target="_blank"
+										rel="noopener"
+										class="font-mono text-sm text-[var(--accent)] no-underline break-all"
+									>
+										${ngStatus.public_url}
+									</a>
+								</div>`
+								: null
+						}
+						${
+							ngStatus?.passkey_warning
+								? html`<div class="alert-warning-text max-w-form">${ngStatus.passkey_warning}</div>`
+								: null
+						}
+							${
+								ngForm.enabled && !authReady
+									? html`<div class="alert-warning-text max-w-form">
+										<span class="alert-label-warn">Warning:</span>${" "}
+										ngrok can be enabled now, but remote visitors will see the setup-required
+										page until authentication is configured.
+									</div>`
+									: null
+							}
+						${ngMsg ? html`<div class="text-xs text-[var(--ok)]">${ngMsg}</div>` : null}
+
+						<div class="flex flex-wrap gap-2">
+							<button type="submit" class="provider-btn" disabled=${ngSaving}>
+								${ngSaving ? "Saving\u2026" : "Save ngrok settings"}
+							</button>
+						</div>
+					</form>`
+				}
+		</section>`;
 	}
 
-	function renderTsError(container) {
-		var errEl = cloneHidden("ts-error");
-		if (errEl) {
-			setLinkedText(errEl.querySelector("[data-ts-error-text]"), tsError);
-			container.appendChild(errEl);
-		}
-	}
-
-	function renderTsWarning(container) {
-		var warningEl = document.createElement("div");
-		warningEl.className = "alert-warning-text max-w-form";
-		warningEl.textContent = tsWarning;
-		container.appendChild(warningEl);
-	}
-
-	function renderNotInstalled(container) {
-		var notInst = cloneHidden("ts-not-installed");
-		if (notInst) {
-			notInst.querySelector("[data-ts-recheck]").addEventListener("click", fetchTsStatus);
-			container.appendChild(notInst);
-		}
-	}
-
-	// Build DOM from hidden elements after each render.
-	useEffect(() => {
-		var container = ref.current;
-		if (!container) return;
-		while (container.children.length > 2) container.removeChild(container.lastChild);
-
-		if (tsLoading) {
-			var loadEl = document.createElement("div");
-			loadEl.className = "text-xs text-[var(--muted)]";
-			loadEl.textContent = "Loading\u2026 this can take a few seconds.";
-			container.appendChild(loadEl);
-			return;
-		}
-		if (tsStatus?.installed) renderInstalledBar(container, tsStatus);
-		if (tsError) renderTsError(container);
-		if (tsWarning) renderTsWarning(container);
-		if (tsStatus?.installed === false) {
-			if (!tsError) renderNotInstalled(container);
-			return;
-		}
-		renderInstalledState(container);
-	});
-
-	return html`<div ref=${ref} class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
-		<h2 class="text-lg font-medium text-[var(--text-strong)]">Tailscale</h2>
-		<p class="text-xs text-[var(--muted)] leading-relaxed max-w-form" style="margin:0;">
-			Expose the gateway via Tailscale Serve (tailnet-only HTTPS) or Funnel
-			(public HTTPS). The gateway stays bound to localhost; Tailscale proxies
-			traffic to it.
+	return html`<div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
+		<h2 class="text-lg font-medium text-[var(--text-strong)]">Remote Access</h2>
+		<p class="text-xs text-[var(--muted)] leading-relaxed max-w-[60rem]" style="margin:0;">
+			Choose how moltis is exposed beyond localhost. Tailscale is the safer default for tailnet access and
+			optional public Funnel, while ngrok gives you a managed public HTTPS URL for teams, demos, and shared
+			endpoints.
 		</p>
-	</div>`;
+			<div class="flex flex-col gap-4">
+				${renderTailscaleCard()}
+				${renderNgrokCard()}
+			</div>
+		</div>`;
 }
 
 // ── Voice section ────────────────────────────────────────────
@@ -5051,7 +5411,7 @@ function SettingsPage() {
 						${section === "security" ? html`<${SecuritySection} />` : null}
 						${section === "vault" ? html`<${VaultSection} />` : null}
 						${section === "ssh" ? html`<${SshSection} />` : null}
-						${section === "tailscale" ? html`<${TailscaleSection} />` : null}
+						${section === "remote-access" ? html`<${RemoteAccessSection} />` : null}
 						${
 							section === "voice"
 								? gon.get("voice_enabled") === true
@@ -5084,13 +5444,14 @@ registerPrefix(
 		container.style.cssText = "flex-direction:row;padding:0;overflow:hidden;";
 		var parts = (param || "").replace(/:/g, "/").split("/").filter(Boolean);
 		var requestedSection = parts[0] || "";
+		var requestedSectionAlias = requestedSection === "tailscale" ? "remote-access" : requestedSection;
 		var subPath = parts.slice(1).join("/");
-		var isValidSection = requestedSection && getSectionItems().some((s) => s.id === requestedSection);
-		var section = isValidSection ? requestedSection : DEFAULT_SECTION;
+		var isValidSection = requestedSectionAlias && getSectionItems().some((s) => s.id === requestedSectionAlias);
+		var section = isValidSection ? requestedSectionAlias : DEFAULT_SECTION;
 		activeSection.value = section;
 		activeSubPath.value = isValidSection ? subPath : "";
 		mobileSidebarVisible.value = !isMobileViewport();
-		if (!isValidSection) {
+		if (!isValidSection || requestedSectionAlias !== requestedSection) {
 			history.replaceState(null, "", settingsPath(section));
 		}
 		render(html`<${SettingsPage} />`, container);

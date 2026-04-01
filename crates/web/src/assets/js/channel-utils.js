@@ -43,9 +43,13 @@ export function fetchChannelStatus() {
 }
 
 /**
- * Default base URL for Teams webhook endpoints (current page origin).
+ * Default base URL for Teams webhook endpoints.
+ * Prefer a discovered public URL when available, otherwise fall back to the
+ * current page origin.
  */
-export function defaultTeamsBaseUrl() {
+export function defaultTeamsBaseUrl(preferredPublicUrl) {
+	var preferred = (preferredPublicUrl || "").trim();
+	if (preferred) return preferred;
 	if (typeof window === "undefined") return "";
 	return window.location?.origin || "";
 }

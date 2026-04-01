@@ -101,8 +101,10 @@ tikv-jemallocator = { optional = true, workspace = true }
 tempfile = { workspace = true }
 
 [features]
-agent = ["moltis-gateway/agent", "moltis-web?/agent"]
+agent  = ["moltis-gateway/agent", "moltis-web?/agent"]
 caldav = ["moltis-gateway/caldav"]
+# User-facing integrations stay default-on in the CLI crate per workspace policy,
+# even when the underlying implementation remains feature-gated in lower crates.
 default = [
   "agent",
   "caldav",
@@ -114,6 +116,7 @@ default = [
   "local-llm-metal",
   "mdns",
   "metrics",
+  "ngrok",
   "openclaw-import",
   "prometheus",
   "push-notifications",
@@ -155,6 +158,7 @@ local-llm-metal    = ["local-llm", "moltis-gateway/local-llm-metal"]
 local-llm-vulkan   = ["local-llm", "moltis-gateway/local-llm-vulkan"]
 mdns               = ["moltis-gateway/mdns"]
 metrics            = ["moltis-httpd/metrics", "moltis-web?/metrics"]
+ngrok              = ["moltis-httpd/ngrok", "moltis-web?/ngrok"]
 openclaw-import    = ["dep:moltis-openclaw-import", "moltis-gateway/openclaw-import"]
 prometheus         = ["moltis-httpd/prometheus"]
 push-notifications = ["moltis-httpd/push-notifications", "moltis-web?/push-notifications"]

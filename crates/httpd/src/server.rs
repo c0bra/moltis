@@ -7,6 +7,9 @@
 
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
 
+#[cfg(feature = "ngrok")]
+use std::sync::Weak;
+
 use {
     axum::{
         Router,
@@ -30,6 +33,12 @@ use {
 use {moltis_channels::ChannelPlugin, moltis_protocol::TICK_INTERVAL_MS};
 
 use moltis_sessions::session_events::{SessionEvent, SessionEventBus};
+
+#[cfg(feature = "ngrok")]
+use secrecy::ExposeSecret;
+
+#[cfg(feature = "ngrok")]
+use tokio_util::sync::CancellationToken;
 
 use moltis_gateway::{
     auth,
@@ -57,6 +66,153 @@ use moltis_tls::CertManager;
 pub struct TailscaleOpts {
     pub mode: String,
     pub reset_on_exit: bool,
+}
+
+#[cfg(feature = "ngrok")]
+#[derive(Clone, Debug)]
+pub struct NgrokRuntimeStatus {
+    pub public_url: String,
+    pub passkey_warning: Option<String>,
+}
+
+#[cfg(feature = "ngrok")]
+struct NgrokActiveTunnel {
+    session: ngrok::Session,
+    forwarder: ngrok::forwarder::Forwarder<ngrok::tunnel::HttpTunnel>,
+    loopback_shutdown: CancellationToken,
+    loopback_task: tokio::task::JoinHandle<()>,
+    status: NgrokRuntimeStatus,
+}
+
+#[cfg(feature = "ngrok")]
+struct NgrokControllerInner {
+    gateway: Arc<GatewayState>,
+    webauthn_registry: Option<SharedWebAuthnRegistry>,
+    runtime: Arc<tokio::sync::RwLock<Option<NgrokRuntimeStatus>>>,
+    app: tokio::sync::RwLock<Option<Router>>,
+    active_tunnel: tokio::sync::Mutex<Option<NgrokActiveTunnel>>,
+}
+
+#[cfg(feature = "ngrok")]
+#[derive(Clone)]
+pub struct NgrokController {
+    inner: Arc<NgrokControllerInner>,
+}
+
+#[cfg(feature = "ngrok")]
+impl NgrokController {
+    fn new(
+        gateway: Arc<GatewayState>,
+        webauthn_registry: Option<SharedWebAuthnRegistry>,
+        runtime: Arc<tokio::sync::RwLock<Option<NgrokRuntimeStatus>>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(NgrokControllerInner {
+                gateway,
+                webauthn_registry,
+                runtime,
+                app: tokio::sync::RwLock::new(None),
+                active_tunnel: tokio::sync::Mutex::new(None),
+            }),
+        }
+    }
+
+    pub async fn configure_app(&self, app: Router) {
+        let mut stored = self.inner.app.write().await;
+        *stored = Some(app);
+    }
+
+    pub async fn apply(
+        &self,
+        ngrok_config: &moltis_config::NgrokConfig,
+    ) -> anyhow::Result<Option<NgrokRuntimeStatus>> {
+        self.stop().await?;
+
+        if !ngrok_config.enabled {
+            info!("ngrok tunnel disabled");
+            return Ok(None);
+        }
+
+        let active_tunnel = self.start(ngrok_config).await?;
+        let status = active_tunnel.status.clone();
+        {
+            let mut runtime = self.inner.runtime.write().await;
+            *runtime = Some(status.clone());
+        }
+        {
+            let mut active = self.inner.active_tunnel.lock().await;
+            *active = Some(active_tunnel);
+        }
+        info!(url = %status.public_url, "ngrok tunnel started");
+        Ok(Some(status))
+    }
+
+    async fn start(
+        &self,
+        ngrok_config: &moltis_config::NgrokConfig,
+    ) -> anyhow::Result<NgrokActiveTunnel> {
+        let app = {
+            let stored = self.inner.app.read().await;
+            stored.clone().ok_or_else(|| {
+                anyhow::anyhow!("ngrok tunnel cannot start before the HTTP app is ready")
+            })?
+        };
+
+        start_ngrok_tunnel(
+            app,
+            Arc::clone(&self.inner.gateway),
+            self.inner.webauthn_registry.clone(),
+            ngrok_config,
+        )
+        .await
+    }
+
+    pub async fn stop(&self) -> anyhow::Result<()> {
+        use ngrok::prelude::TunnelCloser;
+
+        let active_tunnel = {
+            let mut active = self.inner.active_tunnel.lock().await;
+            active.take()
+        };
+
+        let Some(mut active_tunnel) = active_tunnel else {
+            let mut runtime = self.inner.runtime.write().await;
+            *runtime = None;
+            return Ok(());
+        };
+
+        let stopped_url = active_tunnel.status.public_url.clone();
+        active_tunnel.loopback_shutdown.cancel();
+
+        if let Err(error) = active_tunnel.forwarder.close().await {
+            warn!(url = %stopped_url, %error, "failed to close ngrok tunnel");
+        }
+        if let Err(error) = active_tunnel.session.close().await {
+            warn!(url = %stopped_url, %error, "failed to close ngrok session");
+        }
+
+        match active_tunnel.forwarder.join().await {
+            Ok(Ok(())) => {},
+            Ok(Err(error)) => {
+                warn!(url = %stopped_url, %error, "ngrok tunnel forwarder exited with error");
+            },
+            Err(error) => {
+                warn!(url = %stopped_url, %error, "ngrok tunnel join failed");
+            },
+        }
+
+        match active_tunnel.loopback_task.await {
+            Ok(()) => {},
+            Err(error) => {
+                warn!(url = %stopped_url, %error, "ngrok loopback server task join failed");
+            },
+        }
+
+        let mut runtime = self.inner.runtime.write().await;
+        *runtime = None;
+        info!(url = %stopped_url, "ngrok tunnel stopped");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +269,12 @@ pub struct AppState {
     pub methods: Arc<MethodRegistry>,
     pub request_throttle: Arc<crate::request_throttle::RequestThrottle>,
     pub webauthn_registry: Option<SharedWebAuthnRegistry>,
+    #[cfg(feature = "ngrok")]
+    pub ngrok_controller_owner: Option<Arc<NgrokController>>,
+    #[cfg(feature = "ngrok")]
+    pub ngrok_controller: Weak<NgrokController>,
+    #[cfg(feature = "ngrok")]
+    pub ngrok_runtime: Arc<tokio::sync::RwLock<Option<NgrokRuntimeStatus>>>,
     #[cfg(feature = "push-notifications")]
     pub push_service: Option<Arc<moltis_gateway::push::PushService>>,
     #[cfg(feature = "graphql")]
@@ -121,6 +283,20 @@ pub struct AppState {
 
 /// Function signature for adding extra routes (e.g. web-UI) to the gateway.
 pub type RouteEnhancer = fn() -> Router<AppState>;
+
+#[cfg(feature = "ngrok")]
+type GatewayBase = (Router<AppState>, AppState, Arc<NgrokController>);
+
+#[cfg(not(feature = "ngrok"))]
+type GatewayBase = (Router<AppState>, AppState);
+
+#[cfg(feature = "ngrok")]
+fn attach_ngrok_controller_owner(
+    app_state: &mut AppState,
+    ngrok_controller: &Arc<NgrokController>,
+) {
+    app_state.ngrok_controller_owner = Some(Arc::clone(ngrok_controller));
+}
 
 // ── Server startup ───────────────────────────────────────────────────────────
 
@@ -261,12 +437,12 @@ where
 /// or state consumption. Callers can merge additional routes (e.g. web-UI)
 /// before calling [`finalize_gateway_app`].
 #[cfg(feature = "push-notifications")]
-pub fn build_gateway_base(
+fn build_gateway_base_internal(
     state: Arc<GatewayState>,
     methods: Arc<MethodRegistry>,
     push_service: Option<Arc<moltis_gateway::push::PushService>>,
     webauthn_registry: Option<SharedWebAuthnRegistry>,
-) -> (Router<AppState>, AppState) {
+) -> GatewayBase {
     let mut router = Router::new()
         .route("/health", get(health_handler))
         .route("/ws/chat", get(ws_upgrade_handler))
@@ -284,12 +460,26 @@ pub fn build_gateway_base(
 
     #[cfg(feature = "graphql")]
     let graphql_schema = crate::graphql_routes::build_graphql_schema(Arc::clone(&state));
+    #[cfg(feature = "ngrok")]
+    let ngrok_runtime = Arc::new(tokio::sync::RwLock::new(None));
+    #[cfg(feature = "ngrok")]
+    let ngrok_controller = Arc::new(NgrokController::new(
+        Arc::clone(&state),
+        webauthn_registry.clone(),
+        Arc::clone(&ngrok_runtime),
+    ));
 
     let app_state = AppState {
         gateway: state,
         methods,
         request_throttle: Arc::new(crate::request_throttle::RequestThrottle::new()),
         webauthn_registry: webauthn_registry.clone(),
+        #[cfg(feature = "ngrok")]
+        ngrok_controller_owner: None,
+        #[cfg(feature = "ngrok")]
+        ngrok_controller: Arc::downgrade(&ngrok_controller),
+        #[cfg(feature = "ngrok")]
+        ngrok_runtime,
         push_service,
         #[cfg(feature = "graphql")]
         graphql_schema,
@@ -306,6 +496,34 @@ pub fn build_gateway_base(
         );
     }
 
+    #[cfg(feature = "ngrok")]
+    {
+        (router, app_state, ngrok_controller)
+    }
+    #[cfg(not(feature = "ngrok"))]
+    {
+        (router, app_state)
+    }
+}
+
+/// Build the gateway base router and `AppState` without throttle, middleware,
+/// or state consumption. Callers can merge additional routes (e.g. web-UI)
+/// before calling [`finalize_gateway_app`].
+#[cfg(feature = "push-notifications")]
+pub fn build_gateway_base(
+    state: Arc<GatewayState>,
+    methods: Arc<MethodRegistry>,
+    push_service: Option<Arc<moltis_gateway::push::PushService>>,
+    webauthn_registry: Option<SharedWebAuthnRegistry>,
+) -> (Router<AppState>, AppState) {
+    #[cfg(feature = "ngrok")]
+    let (router, mut app_state, ngrok_controller) =
+        build_gateway_base_internal(state, methods, push_service, webauthn_registry);
+    #[cfg(feature = "ngrok")]
+    attach_ngrok_controller_owner(&mut app_state, &ngrok_controller);
+    #[cfg(not(feature = "ngrok"))]
+    let (router, app_state) =
+        build_gateway_base_internal(state, methods, push_service, webauthn_registry);
     (router, app_state)
 }
 
@@ -313,11 +531,11 @@ pub fn build_gateway_base(
 /// or state consumption. Callers can merge additional routes (e.g. web-UI)
 /// before calling [`finalize_gateway_app`].
 #[cfg(not(feature = "push-notifications"))]
-pub fn build_gateway_base(
+fn build_gateway_base_internal(
     state: Arc<GatewayState>,
     methods: Arc<MethodRegistry>,
     webauthn_registry: Option<SharedWebAuthnRegistry>,
-) -> (Router<AppState>, AppState) {
+) -> GatewayBase {
     let mut router = Router::new()
         .route("/health", get(health_handler))
         .route("/ws/chat", get(ws_upgrade_handler))
@@ -344,12 +562,26 @@ pub fn build_gateway_base(
 
     #[cfg(feature = "graphql")]
     let graphql_schema = crate::graphql_routes::build_graphql_schema(Arc::clone(&state));
+    #[cfg(feature = "ngrok")]
+    let ngrok_runtime = Arc::new(tokio::sync::RwLock::new(None));
+    #[cfg(feature = "ngrok")]
+    let ngrok_controller = Arc::new(NgrokController::new(
+        Arc::clone(&state),
+        webauthn_registry.clone(),
+        Arc::clone(&ngrok_runtime),
+    ));
 
     let app_state = AppState {
         gateway: state,
         methods,
         request_throttle: Arc::new(crate::request_throttle::RequestThrottle::new()),
         webauthn_registry: webauthn_registry.clone(),
+        #[cfg(feature = "ngrok")]
+        ngrok_controller_owner: None,
+        #[cfg(feature = "ngrok")]
+        ngrok_controller: Arc::downgrade(&ngrok_controller),
+        #[cfg(feature = "ngrok")]
+        ngrok_runtime,
         #[cfg(feature = "graphql")]
         graphql_schema,
     };
@@ -365,6 +597,32 @@ pub fn build_gateway_base(
         );
     }
 
+    #[cfg(feature = "ngrok")]
+    {
+        (router, app_state, ngrok_controller)
+    }
+    #[cfg(not(feature = "ngrok"))]
+    {
+        (router, app_state)
+    }
+}
+
+/// Build the gateway base router and `AppState` without throttle, middleware,
+/// or state consumption. Callers can merge additional routes (e.g. web-UI)
+/// before calling [`finalize_gateway_app`].
+#[cfg(not(feature = "push-notifications"))]
+pub fn build_gateway_base(
+    state: Arc<GatewayState>,
+    methods: Arc<MethodRegistry>,
+    webauthn_registry: Option<SharedWebAuthnRegistry>,
+) -> (Router<AppState>, AppState) {
+    #[cfg(feature = "ngrok")]
+    let (router, mut app_state, ngrok_controller) =
+        build_gateway_base_internal(state, methods, webauthn_registry);
+    #[cfg(feature = "ngrok")]
+    attach_ngrok_controller_owner(&mut app_state, &ngrok_controller);
+    #[cfg(not(feature = "ngrok"))]
+    let (router, app_state) = build_gateway_base_internal(state, methods, webauthn_registry);
     (router, app_state)
 }
 
@@ -460,6 +718,8 @@ pub struct BannerMeta {
     pub openclaw_status: String,
     pub setup_code_display: Option<String>,
     pub webauthn_registry: Option<SharedWebAuthnRegistry>,
+    #[cfg(feature = "ngrok")]
+    pub ngrok_controller: Arc<NgrokController>,
     pub browser_for_lifecycle: Arc<dyn moltis_gateway::services::BrowserService>,
     pub browser_tool_for_warmup: Option<Arc<dyn moltis_agents::tool_registry::AgentTool>>,
     pub config: moltis_config::schema::MoltisConfig,
@@ -553,6 +813,17 @@ pub async fn prepare_gateway(
     } = core;
 
     #[cfg(feature = "push-notifications")]
+    #[cfg(feature = "ngrok")]
+    let (router, mut app_state, ngrok_controller) = build_gateway_base_internal(
+        Arc::clone(&state),
+        Arc::clone(&methods),
+        push_service,
+        webauthn_registry.clone(),
+    );
+    #[cfg(feature = "push-notifications")]
+    #[cfg(feature = "ngrok")]
+    attach_ngrok_controller_owner(&mut app_state, &ngrok_controller);
+    #[cfg(all(feature = "push-notifications", not(feature = "ngrok")))]
     let (router, app_state) = build_gateway_base(
         Arc::clone(&state),
         Arc::clone(&methods),
@@ -560,6 +831,16 @@ pub async fn prepare_gateway(
         webauthn_registry.clone(),
     );
     #[cfg(not(feature = "push-notifications"))]
+    #[cfg(feature = "ngrok")]
+    let (router, mut app_state, ngrok_controller) = build_gateway_base_internal(
+        Arc::clone(&state),
+        Arc::clone(&methods),
+        webauthn_registry.clone(),
+    );
+    #[cfg(not(feature = "push-notifications"))]
+    #[cfg(feature = "ngrok")]
+    attach_ngrok_controller_owner(&mut app_state, &ngrok_controller);
+    #[cfg(all(not(feature = "push-notifications"), not(feature = "ngrok")))]
     let (router, app_state) = build_gateway_base(
         Arc::clone(&state),
         Arc::clone(&methods),
@@ -677,7 +958,6 @@ pub async fn prepare_gateway(
             ),
         );
     }
-
     #[cfg(feature = "slack")]
     {
         // Slack Events API webhook — receives event callbacks.
@@ -1538,6 +1818,9 @@ pub async fn prepare_gateway(
         }
     }
 
+    #[cfg(feature = "ngrok")]
+    ngrok_controller.configure_app(app.clone()).await;
+
     Ok(PreparedGateway {
         app,
         state: Arc::clone(&state),
@@ -1551,6 +1834,8 @@ pub async fn prepare_gateway(
             openclaw_status: openclaw_startup_status,
             setup_code_display,
             webauthn_registry,
+            #[cfg(feature = "ngrok")]
+            ngrok_controller,
             browser_for_lifecycle,
             browser_tool_for_warmup,
             config,
@@ -1606,6 +1891,120 @@ pub use prepare_gateway_embedded as prepare_httpd_embedded;
 
 /// Re-export `openclaw_detected_for_ui` from gateway for web-UI templates.
 pub use moltis_gateway::server::openclaw_detected_for_ui;
+
+#[cfg(feature = "ngrok")]
+fn ngrok_loopback_has_proxy_headers(headers: &axum::http::HeaderMap) -> bool {
+    moltis_auth::locality::has_proxy_headers(headers)
+}
+
+#[cfg(feature = "ngrok")]
+async fn require_ngrok_proxy_headers(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if !ngrok_loopback_has_proxy_headers(request.headers()) {
+        warn!("rejecting ngrok loopback request without proxy headers");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    next.run(request).await
+}
+
+#[cfg(feature = "ngrok")]
+async fn start_ngrok_tunnel(
+    app: Router,
+    gateway: Arc<GatewayState>,
+    webauthn_registry: Option<SharedWebAuthnRegistry>,
+    ngrok_config: &moltis_config::NgrokConfig,
+) -> anyhow::Result<NgrokActiveTunnel> {
+    use ngrok::prelude::{EndpointInfo, ForwarderBuilder};
+
+    let internal_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let internal_addr = internal_listener.local_addr()?;
+    let internal_app = app
+        .clone()
+        .layer(axum::middleware::from_fn(require_ngrok_proxy_headers));
+    let loopback_shutdown = CancellationToken::new();
+    let loopback_cancel = loopback_shutdown.clone();
+    let loopback_task = tokio::spawn(async move {
+        let server = axum::serve(
+            internal_listener,
+            internal_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            loopback_cancel.cancelled().await;
+        });
+
+        if let Err(error) = server.await {
+            warn!(%error, "ngrok loopback forward server exited");
+        }
+    });
+
+    let forward_to = format!("http://{internal_addr}")
+        .parse()
+        .map_err(|error| anyhow::anyhow!("invalid ngrok forward target: {error}"))?;
+
+    let mut session_builder = ngrok::Session::builder();
+    if let Some(authtoken) = ngrok_config.authtoken.as_ref() {
+        session_builder.authtoken(authtoken.expose_secret());
+    } else {
+        session_builder.authtoken_from_env();
+    }
+    let mut session = match session_builder.connect().await {
+        Ok(session) => session,
+        Err(error) => {
+            loopback_shutdown.cancel();
+            if let Err(join_error) = loopback_task.await {
+                warn!(%join_error, "ngrok loopback server task join failed during startup");
+            }
+            return Err(error.into());
+        },
+    };
+
+    let mut endpoint = session.http_endpoint();
+    if let Some(domain) = ngrok_config.domain.as_deref() {
+        endpoint.domain(domain);
+    }
+    endpoint.forwards_to(format!("moltis://{internal_addr}"));
+    let forwarder = match endpoint.listen_and_forward(forward_to).await {
+        Ok(forwarder) => forwarder,
+        Err(error) => {
+            if let Err(close_error) = session.close().await {
+                warn!(%close_error, "failed to close ngrok session after startup error");
+            }
+            loopback_shutdown.cancel();
+            if let Err(join_error) = loopback_task.await {
+                warn!(%join_error, "ngrok loopback server task join failed during startup");
+            }
+            return Err(error.into());
+        },
+    };
+    let public_url = forwarder.url().to_string();
+    let public_host = url::Url::parse(&public_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string));
+
+    let passkey_warning = moltis_gateway::server::sync_runtime_webauthn_host_and_notice(
+        &gateway,
+        webauthn_registry.as_ref(),
+        public_host.as_deref(),
+        Some(&public_url),
+        "ngrok tunnel",
+    )
+    .await;
+    let status = NgrokRuntimeStatus {
+        public_url,
+        passkey_warning,
+    };
+
+    Ok(NgrokActiveTunnel {
+        session,
+        forwarder,
+        loopback_shutdown,
+        loopback_task,
+        status,
+    })
+}
 
 /// Start the gateway HTTP + WebSocket server.
 ///
@@ -1687,6 +2086,15 @@ pub async fn start_gateway(
     let app = prepared.app;
     let browser_for_warmup = Arc::clone(&banner.browser_for_lifecycle);
     let browser_tool_for_warmup = banner.browser_tool_for_warmup.clone();
+    #[cfg(feature = "ngrok")]
+    let (ngrok_status, ngrok_startup_error) =
+        match banner.ngrok_controller.apply(&config.ngrok).await {
+            Ok(status) => (status, None),
+            Err(error) => {
+                warn!(%error, "ngrok tunnel failed to start; gateway will continue without it");
+                (None, Some(error.to_string()))
+            },
+        };
 
     #[cfg(feature = "tls")]
     if tls_active {
@@ -1806,6 +2214,21 @@ pub async fn start_gateway(
         format!("openclaw: {}", banner.openclaw_status),
     ];
     lines.extend(startup_passkey_origin_lines(&passkey_origins));
+    #[cfg(feature = "ngrok")]
+    if let Some(status) = ngrok_status.as_ref() {
+        lines.push(format!("ngrok: {}", status.public_url));
+        if let Some(passkey_warning) = status.passkey_warning.as_ref() {
+            lines.push(format!("ngrok note: {passkey_warning}"));
+        }
+    } else if let Some(error) = ngrok_startup_error.as_deref() {
+        lines.push(format!("ngrok: failed to start ({error})"));
+    }
+    #[cfg(not(feature = "ngrok"))]
+    if config.ngrok.enabled {
+        lines.push(
+            "ngrok: enabled in config but this build does not include the ngrok feature".into(),
+        );
+    }
     // Hint about Apple Container on macOS when using Docker or Podman.
     #[cfg(target_os = "macos")]
     if banner.sandbox_backend_name == "docker" || banner.sandbox_backend_name == "podman" {
@@ -2406,6 +2829,21 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ngrok")]
+    #[test]
+    fn ngrok_loopback_guard_rejects_requests_without_proxy_headers() {
+        let headers = axum::http::HeaderMap::new();
+        assert!(!ngrok_loopback_has_proxy_headers(&headers));
+    }
+
+    #[cfg(feature = "ngrok")]
+    #[test]
+    fn ngrok_loopback_guard_allows_requests_with_proxy_headers() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.50".parse().unwrap());
+        assert!(ngrok_loopback_has_proxy_headers(&headers));
+    }
+
     #[test]
     fn ipv6_bind_addresses_parse_correctly() {
         // Regression test for GitHub issue #447 — binding to "::" crashed
@@ -2463,5 +2901,70 @@ mod tests {
             "enter this code to set your password or register a passkey",
             "",
         ]);
+    }
+
+    #[cfg(feature = "ngrok")]
+    #[test]
+    fn public_build_gateway_base_keeps_ngrok_controller_alive() {
+        let state = GatewayState::new(
+            auth::resolve_auth(None, None),
+            moltis_gateway::services::GatewayServices::noop(),
+        );
+        let methods = Arc::new(MethodRegistry::new());
+        #[cfg(feature = "push-notifications")]
+        let (_router, app_state) = build_gateway_base(state, methods, None, None);
+        #[cfg(not(feature = "push-notifications"))]
+        let (_router, app_state) = build_gateway_base(state, methods, None);
+
+        assert!(app_state.ngrok_controller_owner.is_some());
+        assert!(app_state.ngrok_controller.upgrade().is_some());
+    }
+
+    #[cfg(feature = "ngrok")]
+    #[test]
+    fn attaching_owner_keeps_internal_ngrok_controller_alive_after_local_arc_drop() {
+        let state = GatewayState::new(
+            auth::resolve_auth(None, None),
+            moltis_gateway::services::GatewayServices::noop(),
+        );
+        let methods = Arc::new(MethodRegistry::new());
+        #[cfg(feature = "push-notifications")]
+        let (_router, app_state, ngrok_controller) =
+            build_gateway_base_internal(state, methods, None, None);
+        #[cfg(not(feature = "push-notifications"))]
+        let (_router, mut app_state, ngrok_controller) =
+            build_gateway_base_internal(state, methods, None);
+
+        assert!(app_state.ngrok_controller.upgrade().is_some());
+
+        let weak = app_state.ngrok_controller.clone();
+        drop(ngrok_controller);
+        assert!(weak.upgrade().is_none());
+
+        #[cfg(feature = "push-notifications")]
+        let (_router, mut app_state, ngrok_controller) = build_gateway_base_internal(
+            GatewayState::new(
+                auth::resolve_auth(None, None),
+                moltis_gateway::services::GatewayServices::noop(),
+            ),
+            Arc::new(MethodRegistry::new()),
+            None,
+            None,
+        );
+        #[cfg(not(feature = "push-notifications"))]
+        let (_router, mut app_state, ngrok_controller) = build_gateway_base_internal(
+            GatewayState::new(
+                auth::resolve_auth(None, None),
+                moltis_gateway::services::GatewayServices::noop(),
+            ),
+            Arc::new(MethodRegistry::new()),
+            None,
+        );
+
+        attach_ngrok_controller_owner(&mut app_state, &ngrok_controller);
+        let weak = app_state.ngrok_controller.clone();
+        drop(ngrok_controller);
+        assert!(weak.upgrade().is_some());
+        assert!(app_state.ngrok_controller_owner.is_some());
     }
 }

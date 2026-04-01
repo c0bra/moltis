@@ -202,6 +202,7 @@ impl Default for ResolvedIdentity {
 #[serde(default)]
 pub struct MoltisConfig {
     pub server: ServerConfig,
+    pub ngrok: NgrokConfig,
     pub providers: ProvidersConfig,
     pub chat: ChatConfig,
     pub tools: ToolsConfig,
@@ -833,6 +834,23 @@ impl Default for ServerConfig {
             shiki_cdn_url: None,
         }
     }
+}
+
+/// ngrok public HTTPS tunnel configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NgrokConfig {
+    /// Whether the ngrok tunnel is enabled.
+    pub enabled: bool,
+    /// ngrok authtoken. If unset, `NGROK_AUTHTOKEN` is used.
+    #[serde(
+        default,
+        serialize_with = "serialize_option_secret",
+        deserialize_with = "deserialize_option_secret"
+    )]
+    pub authtoken: Option<Secret<String>>,
+    /// Optional reserved/static domain to request from ngrok.
+    pub domain: Option<String>,
 }
 
 /// Failover configuration for automatic model/provider failover.

@@ -828,72 +828,129 @@ pub fn start_browser_warmup_after_listener(
     spawn_post_listener_warmups(browser_service, browser_tool);
 }
 
+/// Register a runtime-discovered host in the WebAuthn registry.
+///
+/// Returns a user-facing warning when the host is newly registered and
+/// existing passkeys may need to be re-added for that hostname.
+pub async fn sync_runtime_webauthn_host_and_notice(
+    gateway: &GatewayState,
+    registry: Option<&SharedWebAuthnRegistry>,
+    hostname: Option<&str>,
+    origin_override: Option<&str>,
+    source: &str,
+) -> Option<String> {
+    let hostname = hostname?;
+    let normalized = crate::auth_webauthn::normalize_host(hostname);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let registry = registry?;
+    if registry.read().await.contains_host(&normalized) {
+        return None;
+    }
+
+    let origin = if let Some(origin_override) = origin_override {
+        origin_override.to_string()
+    } else {
+        let scheme = if gateway.tls_active {
+            "https"
+        } else {
+            "http"
+        };
+        format!("{scheme}://{normalized}:{}", gateway.port)
+    };
+
+    let origin_url = match webauthn_rs::prelude::Url::parse(&origin) {
+        Ok(url) => url,
+        Err(error) => {
+            warn!(
+                host = %normalized,
+                origin = %origin,
+                %error,
+                "invalid runtime WebAuthn origin from {source}"
+            );
+            return None;
+        },
+    };
+    let webauthn = match crate::auth_webauthn::WebAuthnState::new(&normalized, &origin_url, &[]) {
+        Ok(webauthn) => webauthn,
+        Err(error) => {
+            warn!(
+                host = %normalized,
+                origin = %origin,
+                %error,
+                "failed to initialize runtime WebAuthn RP from {source}"
+            );
+            return None;
+        },
+    };
+
+    {
+        let mut reg = registry.write().await;
+        if reg.contains_host(&normalized) {
+            return None;
+        }
+        reg.add(normalized.clone(), webauthn);
+        info!(
+            host = %normalized,
+            origin = %origin,
+            origins = ?reg.get_all_origins(),
+            "WebAuthn RP registered from {source}"
+        );
+    }
+
+    let has_passkeys = if let Some(store) = gateway.credential_store.as_ref() {
+        store.has_passkeys().await.unwrap_or(false)
+    } else {
+        false
+    };
+
+    if has_passkeys {
+        gateway.add_passkey_host_update_pending(&normalized).await;
+        Some(format!(
+            "New host detected ({normalized}). Existing passkeys may not work on this host. Sign in with password, then add a new passkey in Settings > Authentication."
+        ))
+    } else {
+        None
+    }
+}
+
 #[cfg(feature = "tailscale")]
 fn spawn_webauthn_tailscale_registration(
+    gateway: Arc<GatewayState>,
     registry: SharedWebAuthnRegistry,
-    default_scheme: String,
-    port: u16,
 ) {
     tokio::spawn(async move {
         let started = std::time::Instant::now();
         match CliTailscaleManager::new().hostname().await {
             Ok(Some(ts_hostname)) => {
-                let ts_host = crate::auth_webauthn::normalize_host(&ts_hostname);
-                if ts_host.is_empty() {
-                    debug!(
+                let registered = sync_runtime_webauthn_host_and_notice(
+                    &gateway,
+                    Some(&registry),
+                    Some(&ts_hostname),
+                    None,
+                    "tailscale hostname",
+                )
+                .await
+                .is_some()
+                    || registry
+                        .read()
+                        .await
+                        .contains_host(&crate::auth_webauthn::normalize_host(&ts_hostname));
+                if registered {
+                    info!(
+                        hostname = %ts_hostname,
                         elapsed_ms = started.elapsed().as_millis(),
-                        "tailscale hostname is empty, skipping WebAuthn RP registration"
+                        "processed Tailscale WebAuthn hostname"
                     );
-                    return;
-                }
-
-                let ts_origin = format!("{default_scheme}://{ts_host}:{port}");
-                let origin_url = match webauthn_rs::prelude::Url::parse(&ts_origin) {
-                    Ok(origin_url) => origin_url,
-                    Err(error) => {
-                        warn!(
-                            hostname = %ts_hostname,
-                            origin = %ts_origin,
-                            %error,
-                            "invalid Tailscale WebAuthn origin URL"
-                        );
-                        return;
-                    },
-                };
-                let webauthn_state =
-                    match crate::auth_webauthn::WebAuthnState::new(&ts_host, &origin_url, &[]) {
-                        Ok(webauthn_state) => webauthn_state,
-                        Err(error) => {
-                            warn!(
-                                rp_id = %ts_host,
-                                %error,
-                                "failed to initialize Tailscale WebAuthn RP"
-                            );
-                            return;
-                        },
-                    };
-
-                let mut registry = registry.write().await;
-                if registry.contains_host(&ts_host) {
+                } else {
                     debug!(
-                        rp_id = %ts_host,
+                        hostname = %ts_hostname,
                         elapsed_ms = started.elapsed().as_millis(),
-                        "tailscale hostname already registered in WebAuthn registry"
+                        "tailscale hostname did not add a new WebAuthn RP"
                     );
-                    return;
                 }
-
-                registry.add(ts_host.clone(), webauthn_state);
-                let origins = registry.get_all_origins();
-                drop(registry);
-
-                info!(
-                    rp_id = %ts_host,
-                    origin = %ts_origin,
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "WebAuthn RP registered from Tailscale hostname"
-                );
-                info!(origins = ?origins, "WebAuthn passkeys origins updated");
             },
             Ok(None) => {
                 debug!(
@@ -1711,17 +1768,6 @@ pub async fn prepare_gateway_core(
             None
         }
     };
-
-    #[cfg(feature = "tailscale")]
-    if explicit_rp_id.is_none()
-        && let Some(registry) = webauthn_registry.as_ref()
-    {
-        spawn_webauthn_tailscale_registration(
-            Arc::clone(registry),
-            default_scheme.to_string(),
-            port,
-        );
-    }
 
     // If MOLTIS_PASSWORD is set and no password in DB yet, migrate it.
     if let Some(ref pw) = password
@@ -3061,6 +3107,13 @@ pub async fn prepare_gateway_core(
         vault.clone(),
     );
     startup_mem_probe.checkpoint("gateway_state.created");
+
+    #[cfg(feature = "tailscale")]
+    if explicit_rp_id.is_none()
+        && let Some(registry) = webauthn_registry.as_ref()
+    {
+        spawn_webauthn_tailscale_registration(Arc::clone(&state), Arc::clone(registry));
+    }
 
     match credential_store.ssh_target_count().await {
         Ok(count) => state.ssh_target_count.store(count, Ordering::Relaxed),
@@ -4413,9 +4466,11 @@ mod tests {
     use {
         super::*,
         async_trait::async_trait,
+        moltis_auth::{AuthMode, CredentialStore, ResolvedAuth},
         moltis_common::types::ReplyPayload,
         moltis_providers::raw_model_id,
         secrecy::Secret,
+        sqlx::SqlitePool,
         std::{
             collections::{HashMap, HashSet},
             sync::OnceLock,
@@ -4561,6 +4616,94 @@ mod tests {
         let req = cron_delivery_request();
 
         maybe_deliver_cron_output(None, &req, "Daily digest ready").await;
+    }
+
+    #[tokio::test]
+    async fn sync_runtime_webauthn_host_registers_new_origin() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let credential_store = Arc::new(CredentialStore::new(pool).await.unwrap());
+        let gateway = GatewayState::with_options(
+            ResolvedAuth {
+                mode: AuthMode::Token,
+                token: None,
+                password: None,
+            },
+            GatewayServices::noop(),
+            None,
+            Some(Arc::clone(&credential_store)),
+            None,
+            false,
+            false,
+            false,
+            None,
+            None,
+            18789,
+            false,
+            None,
+            None,
+            #[cfg(feature = "metrics")]
+            None,
+            #[cfg(feature = "metrics")]
+            None,
+            #[cfg(feature = "vault")]
+            None,
+        );
+        let registry = Arc::new(tokio::sync::RwLock::new(
+            crate::auth_webauthn::WebAuthnRegistry::new(),
+        ));
+
+        let notice = sync_runtime_webauthn_host_and_notice(
+            &gateway,
+            Some(&registry),
+            Some("team-gateway.ngrok.app"),
+            Some("https://team-gateway.ngrok.app"),
+            "test",
+        )
+        .await;
+
+        assert!(notice.is_none(), "unexpected notice: {notice:?}");
+        assert!(
+            registry
+                .read()
+                .await
+                .contains_host("team-gateway.ngrok.app")
+        );
+        assert!(
+            gateway.passkey_host_update_pending().await.is_empty(),
+            "passkey warning should not be queued without existing passkeys"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_runtime_webauthn_host_rejects_invalid_origin() {
+        let gateway = GatewayState::new(
+            ResolvedAuth {
+                mode: AuthMode::Token,
+                token: None,
+                password: None,
+            },
+            GatewayServices::noop(),
+        );
+        let registry = Arc::new(tokio::sync::RwLock::new(
+            crate::auth_webauthn::WebAuthnRegistry::new(),
+        ));
+
+        let notice = sync_runtime_webauthn_host_and_notice(
+            &gateway,
+            Some(&registry),
+            Some("team-gateway.ngrok.app"),
+            Some("not a url"),
+            "test",
+        )
+        .await;
+
+        assert!(notice.is_none());
+        assert!(
+            !registry
+                .read()
+                .await
+                .contains_host("team-gateway.ngrok.app")
+        );
     }
 
     #[test]

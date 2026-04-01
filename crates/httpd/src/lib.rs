@@ -24,6 +24,8 @@ pub mod graphql_routes;
 pub mod metrics_middleware;
 #[cfg(feature = "metrics")]
 pub mod metrics_routes;
+#[cfg(feature = "ngrok")]
+pub mod ngrok_routes;
 #[cfg(feature = "push-notifications")]
 pub mod push_routes;
 #[cfg(feature = "tailscale")]

@@ -53,9 +53,13 @@ pub async fn check_auth(
     is_local: bool,
 ) -> AuthResult {
     if store.is_auth_disabled() {
-        return AuthResult::Allowed(AuthIdentity {
-            method: AuthMethod::Loopback,
-        });
+        return if is_local {
+            AuthResult::Allowed(AuthIdentity {
+                method: AuthMethod::Loopback,
+            })
+        } else {
+            AuthResult::SetupRequired
+        };
     }
 
     if !store.is_setup_complete() {
@@ -365,7 +369,7 @@ pub fn parse_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, sqlx::SqlitePool};
 
     #[test]
     fn test_parse_cookie() {
@@ -403,5 +407,27 @@ mod tests {
     #[test]
     fn public_identity_path_is_public() {
         assert!(is_public_path("/api/public/identity"));
+    }
+
+    #[tokio::test]
+    async fn auth_disabled_still_requires_setup_for_remote_requests()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let pool = SqlitePool::connect("sqlite::memory:").await?;
+        let auth_config = moltis_config::AuthConfig { disabled: true };
+        let store = CredentialStore::with_config(pool, &auth_config).await?;
+        let headers = HeaderMap::new();
+
+        assert!(matches!(
+            check_auth(&store, &headers, true).await,
+            AuthResult::Allowed(AuthIdentity {
+                method: AuthMethod::Loopback,
+            })
+        ));
+        assert!(matches!(
+            check_auth(&store, &headers, false).await,
+            AuthResult::SetupRequired
+        ));
+
+        Ok(())
     }
 }

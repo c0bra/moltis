@@ -479,6 +479,14 @@ fn build_schema_map() -> KnownKeys {
             ])),
         ),
         (
+            "ngrok",
+            Struct(HashMap::from([
+                ("enabled", Leaf),
+                ("authtoken", Leaf),
+                ("domain", Leaf),
+            ])),
+        ),
+        (
             "tailscale",
             Struct(HashMap::from([("mode", Leaf), ("reset_on_exit", Leaf)])),
         ),
@@ -1181,6 +1189,15 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
         });
     }
 
+    if config.ngrok.enabled && config.auth.disabled {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "security",
+            path: "ngrok.enabled".into(),
+            message: "ngrok is enabled while auth.disabled is true; remote visitors will be blocked with setup required until authentication is configured".into(),
+        });
+    }
+
     // Unknown sandbox backend
     let valid_sandbox_backends = [
         "auto",
@@ -1794,6 +1811,50 @@ mode = "tunnel"
         assert!(
             warning.is_some(),
             "expected warning for unknown tailscale mode 'tunnel'"
+        );
+    }
+
+    #[test]
+    fn ngrok_fields_are_recognized() {
+        let toml = r#"
+[ngrok]
+enabled = true
+authtoken = "secret"
+domain = "team-gateway.ngrok.app"
+"#;
+        let result = validate_toml_str(toml);
+        let unknown = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "unknown-field" && d.path.starts_with("ngrok."));
+        assert!(
+            unknown.is_none(),
+            "ngrok fields should be recognized, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn ngrok_with_disabled_auth_warns() {
+        let toml = r#"
+[ngrok]
+enabled = true
+
+[auth]
+disabled = true
+"#;
+        let result = validate_toml_str(toml);
+        let warning = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "security" && d.path == "ngrok.enabled");
+        assert!(
+            warning.is_some(),
+            "expected security warning for ngrok.enabled with auth.disabled"
+        );
+        assert_eq!(
+            warning.unwrap().message,
+            "ngrok is enabled while auth.disabled is true; remote visitors will be blocked with setup required until authentication is configured"
         );
     }
 

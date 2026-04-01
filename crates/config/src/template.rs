@@ -564,6 +564,17 @@ providers = ["whisper", "mistral", "elevenlabs"] # UI allowlist (empty = show al
 # model = "tts-1"                 # tts-1 or tts-1-hd
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NGROK
+# ══════════════════════════════════════════════════════════════════════════════
+# Expose moltis through a public HTTPS tunnel managed by ngrok.
+# Requires a build with the `ngrok` feature and an ngrok authtoken.
+
+[ngrok]
+enabled = false                   # true = create a public HTTPS tunnel at startup
+# authtoken = "${{NGROK_AUTHTOKEN}}" # Optional if NGROK_AUTHTOKEN env var is already set
+# domain = "team-gateway.ngrok.app"  # Optional reserved/static ngrok domain
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TAILSCALE
 # ══════════════════════════════════════════════════════════════════════════════
 # Expose moltis via Tailscale Serve (private) or Funnel (public).

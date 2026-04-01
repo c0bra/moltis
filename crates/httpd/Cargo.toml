@@ -37,6 +37,7 @@ moltis-slack          = { optional = true, workspace = true }
 moltis-tls            = { optional = true, workspace = true }
 moltis-tools          = { workspace = true }
 moltis-vault          = { optional = true, workspace = true }
+ngrok                 = { optional = true, workspace = true }
 rand                  = { workspace = true }
 reqwest               = { workspace = true }
 rustls                = { optional = true, workspace = true }
@@ -47,6 +48,7 @@ sysinfo               = { workspace = true }
 tempfile              = { workspace = true }
 tokio                 = { workspace = true }
 tokio-tungstenite     = { workspace = true }
+tokio-util            = { workspace = true }
 toml                  = { workspace = true }
 tower-http            = { features = ["catch-panic", "compression-gzip", "compression-zstd", "cors", "limit", "request-id", "sensitive-headers", "set-header", "trace"], workspace = true }
 tracing               = { workspace = true }
@@ -77,6 +79,7 @@ graphql = [
 ]
 mdns = ["moltis-gateway/mdns"]
 metrics = ["dep:moltis-metrics", "moltis-gateway/metrics"]
+ngrok = ["dep:ngrok"]
 prometheus = ["metrics", "moltis-gateway/prometheus"]
 push-notifications = ["dep:chrono", "moltis-gateway/push-notifications"]
 slack = ["dep:moltis-slack", "moltis-gateway/slack"]

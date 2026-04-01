@@ -43,7 +43,7 @@ test.describe("Settings navigation", () => {
 		await expect(page.getByRole("heading", { name: "Identity", exact: true })).toBeVisible();
 	});
 
-	test("settings nav keeps distinct icons for nodes, tailscale, network audit, and openclaw import", async ({
+	test("settings nav keeps distinct icons for nodes, remote access, network audit, and openclaw import", async ({
 		page,
 	}) => {
 		const pageErrors = watchPageErrors(page);
@@ -71,7 +71,7 @@ test.describe("Settings navigation", () => {
 				nodes: readRuleMask('.settings-nav-item[data-section="nodes"]::before'),
 				ssh: readRuleMask('.settings-nav-item[data-section="ssh"]::before'),
 				tools: readRuleMask('.settings-nav-item[data-section="tools"]::before'),
-				tailscale: readRuleMask('.settings-nav-item[data-section="tailscale"]::before'),
+				remoteAccess: readRuleMask('.settings-nav-item[data-section="remote-access"]::before'),
 				networkAudit: readRuleMask('.settings-nav-item[data-section="network-audit"]::before'),
 				mcp: readRuleMask('.settings-nav-item[data-section="mcp"]::before'),
 				openclawImport: readRuleMask('.settings-nav-item[data-section="import"]::before'),
@@ -88,10 +88,10 @@ test.describe("Settings navigation", () => {
 		}
 		expect(hasMask(masks.ssh)).toBeTruthy();
 		expect(hasMask(masks.tools)).toBeTruthy();
-		expect(hasMask(masks.tailscale)).toBeTruthy();
+		expect(hasMask(masks.remoteAccess)).toBeTruthy();
 		expect(hasMask(masks.networkAudit)).toBeTruthy();
 		expect(hasMask(masks.mcp)).toBeTruthy();
-		expect(masks.tailscale).not.toBe(masks.networkAudit);
+		expect(masks.remoteAccess).not.toBe(masks.networkAudit);
 
 		// Import appears only when OpenClaw is detected in this run.
 		if (masks.openclawImport !== null) {
@@ -110,7 +110,7 @@ test.describe("Settings navigation", () => {
 		{ id: "voice", heading: "Voice" },
 		{ id: "security", heading: "Security" },
 		{ id: "ssh", heading: "SSH" },
-		{ id: "tailscale", heading: "Tailscale" },
+		{ id: "remote-access", heading: "Remote Access" },
 		{ id: "network-audit", heading: "Network Audit" },
 		{ id: "notifications", heading: "Notifications" },
 		{ id: "providers", heading: "LLMs" },
@@ -140,6 +140,63 @@ test.describe("Settings navigation", () => {
 			expect(pageErrors).toEqual([]);
 		});
 	}
+
+	test("remote access page shows tailscale and ngrok cards", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await page.route("**/api/auth/status", async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					auth_disabled: false,
+					authenticated: true,
+					has_api_keys: false,
+					has_passkeys: false,
+					has_password: true,
+				}),
+			});
+		});
+		await page.route("**/api/tailscale/status", async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					hostname: "moltis.tail-scale.ts.net",
+					installed: true,
+					login_name: "team@example.com",
+					mode: "serve",
+					tailnet: "example.ts.net",
+					tailscale_ip: "100.64.0.10",
+					tailscale_up: true,
+					url: "https://moltis.tail-scale.ts.net",
+					version: "1.88.2",
+				}),
+			});
+		});
+		await page.route("**/api/ngrok/status", async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					authtoken_present: true,
+					authtoken_source: "config",
+					domain: "team-gateway.ngrok.app",
+					enabled: true,
+					public_url: "https://team-gateway.ngrok.app",
+				}),
+			});
+		});
+
+		await navigateAndWait(page, "/settings/remote-access");
+
+		await expect(page.getByRole("heading", { name: "Remote Access", exact: true })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Tailscale", exact: true })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "ngrok", exact: true })).toBeVisible();
+		await expect(page.getByText("https://team-gateway.ngrok.app", { exact: true })).toBeVisible();
+		await expect(page.getByRole("button", { name: "Save ngrok settings", exact: true })).toBeVisible();
+
+		expect(pageErrors).toEqual([]);
+	});
 
 	test("identity form elements render", async ({ page }) => {
 		await navigateAndWait(page, "/settings/identity");
@@ -585,7 +642,7 @@ test.describe("Settings navigation", () => {
 		if (navItems.includes("Encryption")) expectedPrefix.push("Encryption");
 		if (navItems.includes("SSH")) expectedPrefix.push("SSH");
 		expectedPrefix.push(
-			"Tailscale",
+			"Remote Access",
 			"Network Audit",
 			"Sandboxes",
 			"Channels",

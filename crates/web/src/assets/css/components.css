@@ -1146,7 +1146,7 @@
   -webkit-mask-image: url("../icons/masks/mask-882cc0c8c4c9754a.svg");
   mask-image: url("../icons/masks/mask-882cc0c8c4c9754a.svg");
 }
-.settings-nav-item[data-section="tailscale"]::before {
+.settings-nav-item[data-section="remote-access"]::before {
   -webkit-mask-image: url("../icons/masks/mask-06addc3a60571644.svg");
   mask-image: url("../icons/masks/mask-06addc3a60571644.svg");
 }

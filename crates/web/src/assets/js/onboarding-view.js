@@ -1,7 +1,8 @@
 // ── Onboarding wizard ──────────────────────────────────────
 //
 // Multi-step setup page shown to first-time users.
-// Steps: Auth (conditional) → Identity → Provider → Voice (conditional) → Channel → Summary
+// Steps: Auth (conditional) → Identity → Provider → Voice (conditional) →
+// Remote Access → Channel → Summary
 // No new Rust code — all existing RPC methods and REST endpoints.
 
 import { html } from "htm/preact";
@@ -2282,6 +2283,339 @@ function ChannelTypeSelector({ onSelect, offered }) {
 	</div>`;
 }
 
+function fetchRemoteAccessStatus(path, featureDisabledMessage) {
+	return fetch(path)
+		.then((response) => {
+			var contentType = response.headers.get("content-type") || "";
+			if (response.status === 404 || !contentType.includes("application/json")) {
+				return {
+					error: featureDisabledMessage,
+					feature_disabled: true,
+				};
+			}
+			return response.json();
+		})
+		.catch((error) => ({
+			error: error.message,
+		}));
+}
+
+function preferredPublicBaseUrl({ ngrokStatus, tailscaleStatus }) {
+	var ngrokUrl = typeof ngrokStatus?.public_url === "string" ? ngrokStatus.public_url.trim() : "";
+	if (ngrokUrl) return ngrokUrl;
+
+	var tailscaleUrl = typeof tailscaleStatus?.url === "string" ? tailscaleStatus.url.trim() : "";
+	if (tailscaleStatus?.mode === "funnel" && tailscaleUrl) return tailscaleUrl;
+
+	return "";
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: onboarding remote access manages two public endpoint integrations
+function RemoteAccessStep({ onNext, onBack }) {
+	var [authReady, setAuthReady] = useState(false);
+	var [tsStatus, setTsStatus] = useState(null);
+	var [tsError, setTsError] = useState(null);
+	var [tsWarning, setTsWarning] = useState(null);
+	var [tsLoading, setTsLoading] = useState(true);
+	var [configuringTailscale, setConfiguringTailscale] = useState(false);
+	var [ngStatus, setNgStatus] = useState(null);
+	var [ngError, setNgError] = useState(null);
+	var [ngLoading, setNgLoading] = useState(true);
+	var [ngSaving, setNgSaving] = useState(false);
+	var [ngMsg, setNgMsg] = useState(null);
+	var [ngForm, setNgForm] = useState({
+		enabled: false,
+		authtoken: "",
+		domain: "",
+	});
+
+	function loadAuthStatus() {
+		return fetch("/api/auth/status")
+			.then((response) => (response.ok ? response.json() : null))
+			.then((data) => {
+				var ready = data?.auth_disabled ? false : data?.has_password === true;
+				setAuthReady(ready);
+			})
+			.catch(() => {
+				setAuthReady(false);
+			});
+	}
+
+	function loadTailscaleStatus() {
+		setTsLoading(true);
+		return fetchRemoteAccessStatus("/api/tailscale/status", "Tailscale feature is not enabled in this build.")
+			.then((data) => {
+				setTsStatus(data?.feature_disabled ? null : data);
+				setTsError(data?.error || null);
+				setTsWarning(data?.passkey_warning || null);
+				setTsLoading(false);
+			})
+			.catch((error) => {
+				setTsError(error.message);
+				setTsLoading(false);
+			});
+	}
+
+	function loadNgrokStatus() {
+		setNgLoading(true);
+		return fetchRemoteAccessStatus("/api/ngrok/status", "ngrok feature is not enabled in this build.")
+			.then((data) => {
+				setNgStatus(data?.feature_disabled ? null : data);
+				setNgError(data?.error || null);
+				setNgLoading(false);
+				setNgForm((current) => ({
+					enabled: Boolean(data?.enabled),
+					authtoken: current.authtoken,
+					domain: current.domain || data?.domain || "",
+				}));
+			})
+			.catch((error) => {
+				setNgError(error.message);
+				setNgLoading(false);
+			});
+	}
+
+	useEffect(() => {
+		loadAuthStatus();
+		loadTailscaleStatus();
+		loadNgrokStatus();
+	}, []);
+
+	function setTailscaleMode(mode) {
+		setConfiguringTailscale(true);
+		setTsError(null);
+		setTsWarning(null);
+		fetch("/api/tailscale/configure", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ mode }),
+		})
+			.then((response) =>
+				response
+					.json()
+					.catch(() => ({}))
+					.then((data) => ({ ok: response.ok, data })),
+			)
+			.then(({ ok, data }) => {
+				if (!ok || data.error) {
+					setTsError(data.error || "Failed to configure Tailscale.");
+				} else {
+					setTsWarning(data.passkey_warning || null);
+					loadTailscaleStatus();
+				}
+				setConfiguringTailscale(false);
+			})
+			.catch((error) => {
+				setTsError(error.message);
+				setConfiguringTailscale(false);
+			});
+	}
+
+	function toggleTailscaleFunnel() {
+		var nextMode = tsStatus?.mode === "funnel" ? "off" : "funnel";
+		setTailscaleMode(nextMode);
+	}
+
+	function applyNgrokConfig(nextForm, successMessage) {
+		setNgSaving(true);
+		setNgError(null);
+		setNgMsg(null);
+		fetch("/api/ngrok/config", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				enabled: nextForm.enabled,
+				authtoken: nextForm.authtoken,
+				clear_authtoken: false,
+				domain: nextForm.domain,
+			}),
+		})
+			.then((response) =>
+				response
+					.json()
+					.catch(() => ({}))
+					.then((data) => ({ ok: response.ok, data })),
+			)
+			.then(({ ok, data }) => {
+				setNgSaving(false);
+				if (!ok || data.error) {
+					setNgError(data.error || "Failed to apply ngrok settings.");
+					return;
+				}
+
+				var status = data.status || null;
+				setNgMsg(successMessage);
+				setNgStatus(status);
+				setNgForm({
+					enabled: Boolean(status?.enabled),
+					authtoken: "",
+					domain: status?.domain || nextForm.domain || "",
+				});
+			})
+			.catch((error) => {
+				setNgSaving(false);
+				setNgError(error.message);
+			});
+	}
+
+	function toggleNgrokEnabled() {
+		var nextForm = {
+			...ngForm,
+			enabled: !ngForm.enabled,
+		};
+		setNgForm(nextForm);
+		applyNgrokConfig(nextForm, `ngrok ${nextForm.enabled ? "enabled" : "disabled"}.`);
+	}
+
+	var tailscaleAvailable = tsStatus !== null;
+	var tailscaleFunnelEnabled = tsStatus?.mode === "funnel";
+	var tailscaleInstalled = tsStatus?.installed !== false;
+	var tailscaleBlocked = !(tailscaleAvailable && tailscaleInstalled) || tsStatus?.tailscale_up === false;
+	var ngrokAvailable = ngStatus !== null;
+	var activePublicUrl = preferredPublicBaseUrl({
+		ngrokStatus: ngStatus,
+		tailscaleStatus: tsStatus,
+	});
+
+	return html`<div class="flex flex-col gap-4">
+		<h2 class="text-lg font-medium text-[var(--text-strong)]">Remote Access</h2>
+		<p class="text-xs text-[var(--muted)] leading-relaxed">
+			Public endpoints are optional for most channels, but Microsoft Teams needs one. Enable
+			Tailscale Funnel, ngrok, or both before connecting team channels.
+		</p>
+		${
+			activePublicUrl
+				? html`<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-1">
+					<span class="font-medium text-[var(--text-strong)]">Active public URL</span>
+					<a href=${activePublicUrl} target="_blank" rel="noopener" class="text-[var(--accent)] underline break-all">
+						${activePublicUrl}
+					</a>
+					<span>The Teams webhook step will prefill this URL.</span>
+				</div>`
+				: html`<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)]">
+					Teams webhooks need a public URL. If you skip this step, you can still configure remote access later in
+					Settings.
+				</div>`
+		}
+
+		<section class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-4 flex flex-col gap-4">
+			<div class="flex flex-col gap-1">
+				<h3 class="text-base font-medium text-[var(--text-strong)]">Tailscale Funnel</h3>
+				<p class="text-xs text-[var(--muted)] leading-relaxed">
+					Public HTTPS through Tailscale. Tailscale Serve is tailnet-only, so Teams webhooks need Funnel instead.
+				</p>
+			</div>
+			${
+				tsLoading
+					? html`<div class="text-xs text-[var(--muted)]">Loading Tailscale status…</div>`
+					: html`<div class="text-sm text-[var(--text-strong)]">
+						Tailscale Funnel is ${tailscaleFunnelEnabled ? "enabled" : "disabled"}.
+					</div>`
+			}
+			${tsStatus?.url && tailscaleFunnelEnabled ? html`<a href=${tsStatus.url} target="_blank" rel="noopener" class="text-sm text-[var(--accent)] underline break-all">${tsStatus.url}</a>` : null}
+			${tsError ? html`<${ErrorPanel} message=${tsError} />` : null}
+			${tsWarning ? html`<div class="alert-warning-text max-w-form">${tsWarning}</div>` : null}
+			${
+				tsStatus?.installed === false
+					? html`<a href="https://tailscale.com/download" target="_blank" rel="noopener" class="provider-btn self-start no-underline">
+						Install Tailscale
+					</a>`
+					: null
+			}
+			${
+				tsStatus?.tailscale_up === false
+					? html`<div class="alert-warning-text max-w-form">
+						<span class="alert-label-warn">Warning:</span> Start Tailscale before enabling Funnel.
+					</div>`
+					: null
+			}
+			${
+				authReady
+					? null
+					: html`<div class="alert-warning-text max-w-form">
+						<span class="alert-label-warn">Warning:</span> Funnel can be enabled now, but remote visitors will
+						see the setup-required page until authentication is configured.
+					</div>`
+			}
+			<button
+				type="button"
+				class="provider-btn self-start"
+				disabled=${tsLoading || configuringTailscale || tailscaleBlocked}
+				onClick=${toggleTailscaleFunnel}
+			>
+				${configuringTailscale ? "Applying…" : tailscaleFunnelEnabled ? "Disable Funnel" : "Enable Funnel"}
+			</button>
+		</section>
+
+		<section class="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] p-4 flex flex-col gap-4">
+			<div class="flex flex-col gap-1">
+				<h3 class="text-base font-medium text-[var(--text-strong)]">ngrok</h3>
+				<p class="text-xs text-[var(--muted)] leading-relaxed">
+					Public HTTPS without installing an external binary. This is useful for demos, shared testing, and Teams.
+				</p>
+			</div>
+			${
+				ngLoading
+					? html`<div class="text-xs text-[var(--muted)]">Loading ngrok status…</div>`
+					: html`<div class="text-sm text-[var(--text-strong)]">
+						ngrok is ${ngForm.enabled ? "enabled" : "disabled"}.
+					</div>`
+			}
+			${ngStatus?.public_url ? html`<a href=${ngStatus.public_url} target="_blank" rel="noopener" class="text-sm text-[var(--accent)] underline break-all">${ngStatus.public_url}</a>` : null}
+			${ngError ? html`<${ErrorPanel} message=${ngError} />` : null}
+			${ngStatus?.passkey_warning ? html`<div class="alert-warning-text max-w-form">${ngStatus.passkey_warning}</div>` : null}
+			<div class="flex flex-col gap-1">
+				<label class="text-xs text-[var(--muted)]" for="onboarding-ngrok-authtoken">Authtoken</label>
+				<input
+					id="onboarding-ngrok-authtoken"
+					type="password"
+					class="provider-key-input w-full"
+					placeholder=${ngStatus?.authtoken_source ? "Leave blank to keep the current token" : "Paste your ngrok authtoken"}
+					value=${ngForm.authtoken}
+					onInput=${(e) => setNgForm({ ...ngForm, authtoken: e.currentTarget.value })}
+				/>
+				<div class="text-xs text-[var(--muted)]">
+					Create or copy an authtoken from <a
+						href="https://dashboard.ngrok.com/get-started/your-authtoken"
+						target="_blank"
+						rel="noopener"
+						class="text-[var(--accent)] underline"
+					>ngrok dashboard</a>.
+				</div>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="text-xs text-[var(--muted)]" for="onboarding-ngrok-domain">Reserved domain (optional)</label>
+				<input
+					id="onboarding-ngrok-domain"
+					type="text"
+					class="provider-key-input w-full"
+					placeholder="team-gateway.ngrok.app"
+					value=${ngForm.domain}
+					onInput=${(e) => setNgForm({ ...ngForm, domain: e.currentTarget.value })}
+				/>
+				<div class="text-xs text-[var(--muted)]">Use a reserved domain if you want a stable public hostname.</div>
+			</div>
+			${ngMsg ? html`<div class="text-xs text-[var(--ok)]">${ngMsg}</div>` : null}
+			<button
+				type="button"
+				class="provider-btn self-start"
+				disabled=${!ngrokAvailable || ngLoading || ngSaving}
+				onClick=${toggleNgrokEnabled}
+			>
+				${ngSaving ? "Applying…" : ngForm.enabled ? "Disable ngrok" : "Enable ngrok"}
+			</button>
+		</section>
+
+		<div class="flex flex-wrap items-center gap-3 mt-1">
+			<button type="button" class="provider-btn provider-btn-secondary" onClick=${onBack}>${t("common:actions.back")}</button>
+			<button type="button" class="provider-btn" onClick=${onNext}>${t("common:actions.continue")}</button>
+			<button type="button" class="text-xs text-[var(--muted)] cursor-pointer bg-transparent border-none underline" onClick=${onNext}>
+				Skip for now
+			</button>
+		</div>
+	</div>`;
+}
+
 function TelegramForm({ onConnected, error, setError }) {
 	var [accountId, setAccountId] = useState("");
 	var [token, setToken] = useState("");
@@ -2375,6 +2709,30 @@ function TeamsForm({ onConnected, error, setError }) {
 	var [baseUrl, setBaseUrl] = useState(defaultTeamsBaseUrl());
 	var [bootstrapEndpoint, setBootstrapEndpoint] = useState("");
 	var [saving, setSaving] = useState(false);
+
+	useEffect(() => {
+		var cancelled = false;
+		var currentDefault = defaultTeamsBaseUrl();
+		if (baseUrl !== currentDefault) return undefined;
+
+		Promise.all([
+			fetchRemoteAccessStatus("/api/ngrok/status", "ngrok feature is not enabled in this build."),
+			fetchRemoteAccessStatus("/api/tailscale/status", "Tailscale feature is not enabled in this build."),
+		]).then(([nextNgrokStatus, nextTailscaleStatus]) => {
+			if (cancelled) return;
+			var nextPublicBaseUrl = preferredPublicBaseUrl({
+				ngrokStatus: nextNgrokStatus,
+				tailscaleStatus: nextTailscaleStatus,
+			});
+			if (nextPublicBaseUrl) {
+				setBaseUrl(nextPublicBaseUrl);
+			}
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [baseUrl]);
 
 	function onBootstrap() {
 		var id = appId.trim();
@@ -3279,7 +3637,7 @@ function SummaryStep({ onBack, onFinish }) {
 						data.tailscale?.tailscale_up
 							? html`Connected`
 							: data.tailscale?.installed
-								? html`Installed but not connected — <a href="/settings/tailscale" class="text-[var(--accent)] underline">Configure in Settings</a>`
+								? html`Installed but not connected — <a href="/settings/remote-access" class="text-[var(--accent)] underline">Configure in Settings</a>`
 								: html`Not installed. Install Tailscale for secure remote access.`
 					}
 				<//>`
@@ -3389,15 +3747,22 @@ function OnboardingPage() {
 	if (openclawDetected) allLabels.push(t("onboarding:steps.import"));
 	allLabels.push(t("onboarding:steps.llm"));
 	if (voiceAvailable) allLabels.push(t("onboarding:steps.voice"));
-	allLabels.push(t("onboarding:steps.channel"), t("onboarding:steps.identity"), t("onboarding:steps.summary"));
+	allLabels.push(
+		t("onboarding:steps.remoteAccess"),
+		t("onboarding:steps.channel"),
+		t("onboarding:steps.identity"),
+		t("onboarding:steps.summary"),
+	);
 	var steps = authNeeded ? allLabels : allLabels.slice(1);
 	var stepIndex = authNeeded ? step : step - 1;
 
-	// Compute dynamic step indices: Auth(0) → Import? → LLM → Voice? → Channel → Identity → Summary
+	// Compute dynamic step indices: Auth(0) → Import? → LLM → Voice? →
+	// Remote Access → Channel → Identity → Summary
 	var nextIdx = 1;
 	var importStep = openclawDetected ? nextIdx++ : -1;
 	var llmStep = nextIdx++;
 	var voiceStep = voiceAvailable ? nextIdx++ : -1;
+	var remoteAccessStep = nextIdx++;
 	var channelStep = nextIdx++;
 	var identityStep = nextIdx++;
 	var summaryStep = nextIdx;
@@ -3432,6 +3797,7 @@ function OnboardingPage() {
 			${step === importStep && html`<${OpenClawImportStep} onNext=${goNext} onBack=${authNeeded ? goBack : null} />`}
 			${step === llmStep && html`<${ProviderStep} onNext=${goNext} onBack=${authNeeded || openclawDetected ? goBack : null} />`}
 			${step === voiceStep && html`<${VoiceStep} onNext=${goNext} onBack=${goBack} />`}
+			${step === remoteAccessStep && html`<${RemoteAccessStep} onNext=${goNext} onBack=${goBack} />`}
 			${step === channelStep && html`<${ChannelStep} onNext=${goNext} onBack=${goBack} />`}
 			${step === identityStep && html`<${IdentityStep} onNext=${goNext} onBack=${goBack} />`}
 			${step === summaryStep && html`<${SummaryStep} onBack=${goBack} onFinish=${goFinish} />`}
