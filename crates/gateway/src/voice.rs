@@ -714,6 +714,7 @@ impl SttService for LiveSttService {
         prompt: Option<&str>,
     ) -> ServiceResult {
         let cfg = moltis_config::discover_and_load();
+        let audio_len = audio.len();
 
         let provider_id = match provider {
             Some(s) => {
@@ -734,10 +735,25 @@ impl SttService for LiveSttService {
             prompt: prompt.map(String::from),
         };
 
-        let transcript = stt_provider
-            .transcribe(request)
-            .await
-            .map_err(|e| format!("transcription failed: {}", e))?;
+        debug!(
+            provider = %provider_id,
+            format,
+            audio_bytes = audio_len,
+            language = language.unwrap_or("auto"),
+            has_prompt = prompt.is_some(),
+            "STT transcription request"
+        );
+
+        let transcript = stt_provider.transcribe(request).await.map_err(|e| {
+            warn!(
+                provider = %provider_id,
+                format,
+                audio_bytes = audio_len,
+                error = %e,
+                "STT transcription failed"
+            );
+            format!("transcription failed: {}", e)
+        })?;
 
         Ok(json!({
             "text": transcript.text,

@@ -121,6 +121,7 @@ Agents are not limited to replying in the current chat. Moltis supports three
 main outbound patterns:
 
 - **`send_message` tool** for direct proactive messages to any configured channel account/chat
+- **`update_channel_settings` tool** for safe in-chat edits to channel access rules, allowlists, and model routing
 - **Cron job delivery** for background jobs that should post their final output to a channel
 - **Heartbeat delivery** for periodic heartbeat acknowledgements sent to a chosen chat
 
@@ -135,6 +136,23 @@ Example `send_message` tool call:
 ```
 
 `account_id` is the configured channel account name, either from `moltis.toml` or from a channel account stored through the web UI, and `to` is the destination chat, peer, or room identifier for that platform.
+
+Example `update_channel_settings` tool call:
+
+```json
+{
+  "account_id": "my-telegram-bot",
+  "settings": {
+    "dm_policy": "allowlist",
+    "allowlist_add": ["alice"],
+    "model": "openai/gpt-5"
+  }
+}
+```
+
+`update_channel_settings` intentionally supports a narrow patch surface. It is
+for non-secret channel settings only, not raw `moltis.toml` editing, token
+rotation, or arbitrary config mutation.
 
 ## Access Control
 

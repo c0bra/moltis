@@ -1428,6 +1428,8 @@ pub struct GatewayServices {
     pub network_audit: Arc<dyn crate::network_audit::NetworkAuditService>,
     /// Optional channel registry for direct plugin access (thread context, etc.).
     pub channel_registry: Option<Arc<moltis_channels::ChannelRegistry>>,
+    /// Optional persisted channel store for safe config mutations.
+    pub channel_store: Option<Arc<dyn moltis_channels::store::ChannelStore>>,
     /// Optional channel outbound for sending replies back to channels.
     channel_outbound: Option<Arc<dyn moltis_channels::ChannelOutbound>>,
     /// Optional channel stream outbound for edit-in-place channel streaming.
@@ -1470,6 +1472,14 @@ impl GatewayServices {
         registry: Arc<moltis_channels::ChannelRegistry>,
     ) -> Self {
         self.channel_registry = Some(registry);
+        self
+    }
+
+    pub fn with_channel_store(
+        mut self,
+        store: Arc<dyn moltis_channels::store::ChannelStore>,
+    ) -> Self {
+        self.channel_store = Some(store);
         self
     }
 
@@ -1526,6 +1536,7 @@ impl GatewayServices {
             local_llm: Arc::new(NoopLocalLlmService),
             network_audit: Arc::new(crate::network_audit::NoopNetworkAuditService),
             channel_registry: None,
+            channel_store: None,
             channel_outbound: None,
             channel_stream_outbound: None,
             session_metadata: None,

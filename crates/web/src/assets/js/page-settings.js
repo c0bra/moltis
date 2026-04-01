@@ -3814,7 +3814,7 @@ function VoiceSection() {
 					setVoiceTesting({ id: providerId, type, phase: "transcribing" });
 					rerender();
 
-					var audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+					var audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || mimeType });
 
 					try {
 						var resp = await transcribeAudio(S.activeSessionKey, providerId, audioBlob);
@@ -3822,10 +3822,14 @@ function VoiceSection() {
 						if (resp.ok) {
 							var sttRes = await resp.json();
 
-							if (sttRes.ok && sttRes.transcription?.text) {
+							if (sttRes.ok && typeof sttRes.transcription?.text === "string") {
+								var transcriptText = sttRes.transcription.text.trim();
 								setVoiceTestResults((prev) => ({
 									...prev,
-									[providerId]: { text: sttRes.transcription.text, error: null },
+									[providerId]: {
+										text: transcriptText || null,
+										error: transcriptText ? null : "No speech detected",
+									},
 								}));
 							} else {
 								setVoiceTestResults((prev) => ({

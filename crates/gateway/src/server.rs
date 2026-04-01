@@ -2592,6 +2592,7 @@ pub async fn prepare_gateway_core(
         let router = Arc::new(RegistryOutboundRouter::new(Arc::clone(&registry)));
 
         services = services.with_channel_registry(Arc::clone(&registry));
+        services = services.with_channel_store(Arc::clone(&channel_store));
         let outbound_router = Arc::clone(&router) as Arc<dyn moltis_channels::ChannelOutbound>;
         services = services.with_channel_outbound(Arc::clone(&outbound_router));
         services = services.with_channel_stream_outbound(
@@ -3337,6 +3338,12 @@ pub async fn prepare_gateway_core(
         tool_registry.register(Box::new(crate::channel_agent_tools::SendMessageTool::new(
             Arc::clone(&state.services.channel),
         )));
+        tool_registry.register(Box::new(
+            crate::channel_agent_tools::UpdateChannelSettingsTool::new(
+                Arc::clone(&state.services.channel),
+                state.services.channel_store.clone(),
+            ),
+        ));
         tool_registry.register(Box::new(
             moltis_tools::send_image::SendImageTool::new()
                 .with_sandbox_router(Arc::clone(&sandbox_router)),
