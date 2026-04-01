@@ -910,10 +910,14 @@ function OnboardingProviderRow({
 										onToggle=${() => onToggleModel(m.id)} />`,
 								)
 					}
-					${hasMoreModels ? html`<button
+					${
+						hasMoreModels
+							? html`<button
 						class="text-xs text-[var(--accent)] cursor-pointer bg-transparent border-none py-1 text-left hover:underline"
 						onClick=${() => setShowAllModels(!showAllModels)}
-					>${showAllModels ? "Show fewer models" : `Show ${hiddenModelCount} more models\u2026`}</button>` : null}
+					>${showAllModels ? "Show fewer models" : `Show ${hiddenModelCount} more models\u2026`}</button>`
+							: null
+					}
 				</div>
 				<div class="text-xs text-[var(--muted)]">${selectedModels.size === 0 ? "No models selected" : `${selectedModels.size} model${selectedModels.size > 1 ? "s" : ""} selected`}</div>
 				${error ? html`<${ErrorPanel} message=${error} />` : null}

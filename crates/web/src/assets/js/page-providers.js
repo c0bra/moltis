@@ -298,10 +298,14 @@ function ProviderSection(props) {
 							</button>
 						</div>`,
 					)}
-					${hasMore ? html`<button
+					${
+						hasMore
+							? html`<button
 						class="text-xs text-[var(--accent)] cursor-pointer bg-transparent border-none py-1 text-left hover:underline"
 						onClick=${() => setExpanded(!expanded)}
-					>${expanded ? t("providers:showFewerModels") : t("providers:showAllModels", { count: hiddenCount })}</button>` : null}
+					>${expanded ? t("providers:showFewerModels") : t("providers:showAllModels", { count: hiddenCount })}</button>`
+							: null
+					}
 				</div>`
 		}
 	</div>`;
