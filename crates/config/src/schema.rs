@@ -1580,12 +1580,13 @@ pub enum MapProvider {
     OpenStreetMap,
 }
 
-/// Web tools configuration (search, fetch).
+/// Web tools configuration (search, fetch, firecrawl).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebConfig {
     pub search: WebSearchConfig,
     pub fetch: WebFetchConfig,
+    pub firecrawl: FirecrawlConfig,
 }
 
 /// Search provider selection.
@@ -1595,6 +1596,7 @@ pub enum SearchProvider {
     #[default]
     Brave,
     Perplexity,
+    Firecrawl,
 }
 
 /// Web search tool configuration.
@@ -1687,6 +1689,51 @@ impl Default for WebFetchConfig {
             max_redirects: 3,
             readability: true,
             ssrf_allowlist: Vec::new(),
+        }
+    }
+}
+
+/// Firecrawl integration configuration.
+///
+/// Firecrawl provides high-quality markdown extraction from web pages,
+/// including JS-heavy and bot-protected sites.  Used as a standalone
+/// `firecrawl_scrape` tool, as a `web_search` provider, and as a
+/// fallback extractor inside `web_fetch`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FirecrawlConfig {
+    /// Enable Firecrawl integration.
+    pub enabled: bool,
+    /// Firecrawl API key (overrides `FIRECRAWL_API_KEY` env var).
+    #[serde(
+        default,
+        serialize_with = "serialize_option_secret",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub api_key: Option<Secret<String>>,
+    /// Firecrawl API base URL (for self-hosted instances).
+    pub base_url: String,
+    /// Only extract main content (skip navs, footers, etc.).
+    pub only_main_content: bool,
+    /// HTTP request timeout in seconds.
+    pub timeout_seconds: u64,
+    /// In-memory cache TTL in minutes (0 to disable).
+    pub cache_ttl_minutes: u64,
+    /// Use Firecrawl as fallback in `web_fetch` when readability
+    /// extraction produces poor results.
+    pub web_fetch_fallback: bool,
+}
+
+impl Default for FirecrawlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            base_url: "https://api.firecrawl.dev".into(),
+            only_main_content: true,
+            timeout_seconds: 30,
+            cache_ttl_minutes: 15,
+            web_fetch_fallback: true,
         }
     }
 }

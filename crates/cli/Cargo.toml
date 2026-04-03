@@ -109,6 +109,7 @@ default = [
   "agent",
   "caldav",
   "code-splitter",
+  "firecrawl",
   "file-watcher",
   "graphql",
   "jemalloc",
@@ -135,6 +136,7 @@ default = [
 code-splitter   = ["moltis-memory/code-splitter"]
 embedded-assets = ["moltis-web?/embedded-assets"]
 embedded-wasm   = ["moltis-tools/embedded-wasm"]
+firecrawl       = ["moltis-gateway/firecrawl"]
 file-watcher    = ["moltis-gateway/file-watcher"]
 graphql         = ["moltis-httpd/graphql", "moltis-web?/graphql"]
 jemalloc        = ["dep:tikv-jemallocator"]

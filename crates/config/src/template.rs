@@ -407,6 +407,21 @@ max_redirects = 3                 # Maximum HTTP redirects to follow
 readability = true                # Use readability extraction for HTML (cleaner output)
 # ssrf_allowlist = ["172.22.0.0/16"] # CIDR ranges exempt from SSRF blocking (e.g. Docker networks)
 
+# ── Firecrawl (API-based web scraping) ────────────────────────────────────────
+# High-quality markdown extraction from web pages, including JS-heavy and
+# bot-protected sites.  Used as a standalone firecrawl_scrape tool, as a
+# web_search provider, and as a fallback extractor in web_fetch.
+# Get an API key at https://firecrawl.dev or self-host.
+
+# [tools.web.firecrawl]
+# enabled = false                        # Enable Firecrawl integration
+# api_key = "fc-..."                     # Or set FIRECRAWL_API_KEY env var
+# base_url = "https://api.firecrawl.dev" # API endpoint (change for self-hosted)
+# only_main_content = true               # Strip navs, footers, sidebars
+# timeout_seconds = 30                   # HTTP request timeout
+# cache_ttl_minutes = 15                 # Cache scraped pages (0 = no cache)
+# web_fetch_fallback = true              # Use as fallback when readability fails
+
 # ── Browser Automation ────────────────────────────────────────────────────────
 # Full browser control via Chrome DevTools Protocol (CDP).
 # Use for JavaScript-heavy sites, form filling, screenshots.

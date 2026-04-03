@@ -89,6 +89,7 @@ caldav = ["dep:moltis-caldav"]
 default = [
   "agent",
   "caldav",
+  "firecrawl",
   "file-watcher",
   "graphql",
   "local-llm",
@@ -109,6 +110,7 @@ default = [
   "web-ui",
   "whatsapp",
 ]
+firecrawl = ["moltis-tools/firecrawl"]
 file-watcher = [
   "moltis-memory/file-watcher",
   "moltis-openclaw-import?/file-watcher",

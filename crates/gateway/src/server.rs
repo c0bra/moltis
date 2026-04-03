@@ -3390,6 +3390,8 @@ pub async fn prepare_gateway_core(
             &config.tools.web.search,
             &runtime_env_overrides,
         ) {
+            #[cfg(feature = "firecrawl")]
+            let t = t.with_firecrawl_config(&config.tools.web.firecrawl);
             tool_registry.register(Box::new(t.with_env_provider(Arc::clone(&env_provider))));
         }
         if let Some(t) = moltis_tools::web_fetch::WebFetchTool::from_config(&config.tools.web.fetch)
@@ -3400,6 +3402,14 @@ pub async fn prepare_gateway_core(
             } else {
                 t
             };
+            #[cfg(feature = "firecrawl")]
+            let t = t.with_firecrawl(&config.tools.web.firecrawl);
+            tool_registry.register(Box::new(t));
+        }
+        #[cfg(feature = "firecrawl")]
+        if let Some(t) =
+            moltis_tools::firecrawl::FirecrawlScrapeTool::from_config(&config.tools.web.firecrawl)
+        {
             tool_registry.register(Box::new(t));
         }
         if let Some(t) = moltis_tools::browser::BrowserTool::from_config(&config.tools.browser) {
