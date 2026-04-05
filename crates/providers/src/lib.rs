@@ -385,9 +385,9 @@ pub struct RediscoveryResult {
 }
 
 impl RediscoveryResult {
-    /// Returns `true` when no providers returned any models.
+    /// Returns `true` when no models were discovered across all providers.
     pub fn is_empty(&self) -> bool {
-        self.models.is_empty()
+        self.models.values().all(|v| v.is_empty())
     }
 }
 
