@@ -182,9 +182,10 @@ fn parse_server_config(
         .map(ExposeSecret::expose_secret)
         .is_none_or(|candidate| candidate.trim().is_empty())
     {
-        return Err(ServiceError::message(
-            "missing 'url' parameter for 'sse' transport",
-        ));
+        return Err(ServiceError::message(format!(
+            "missing 'url' parameter for '{}' transport",
+            transport
+        )));
     }
 
     let oauth = if let Some(v) = params.get("oauth") {
@@ -714,6 +715,54 @@ mod tests {
         assert_eq!(
             err.as_ref().map(ToString::to_string).as_deref(),
             Some("missing 'url' parameter for 'sse' transport")
+        );
+    }
+
+    #[test]
+    fn parse_server_config_allows_streamable_http_without_command() {
+        let cfg = parse_server_config(
+            &serde_json::json!({
+                "transport": "streamable-http",
+                "url": "https://mcp.example.com/mcp",
+                "enabled": true
+            }),
+            None,
+        );
+        assert!(
+            cfg.is_ok(),
+            "expected Streamable HTTP config to parse without command, got: {cfg:?}"
+        );
+        let Ok(cfg) = cfg else {
+            panic!("Streamable HTTP config unexpectedly failed to parse");
+        };
+
+        assert!(matches!(
+            cfg.transport,
+            moltis_mcp::TransportType::StreamableHttp
+        ));
+        assert_eq!(cfg.command, "");
+        assert_eq!(
+            cfg.url
+                .as_ref()
+                .map(ExposeSecret::expose_secret)
+                .map(String::as_str),
+            Some("https://mcp.example.com/mcp")
+        );
+    }
+
+    #[test]
+    fn parse_server_config_requires_url_for_streamable_http() {
+        let err = parse_server_config(
+            &serde_json::json!({
+                "transport": "streamable-http",
+            }),
+            None,
+        )
+        .err();
+
+        assert_eq!(
+            err.as_ref().map(ToString::to_string).as_deref(),
+            Some("missing 'url' parameter for 'streamable-http' transport")
         );
     }
 

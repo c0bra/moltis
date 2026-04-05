@@ -351,7 +351,7 @@ impl McpManager {
             config.transport,
             TransportType::Sse | TransportType::StreamableHttp
         ) {
-            return Err(McpManagerError::NotSseTransport {
+            return Err(McpManagerError::NotRemoteTransport {
                 server: name.to_string(),
             }
             .into());
@@ -789,7 +789,7 @@ mod tests {
             .expect_err("expected oauth start to fail for stdio transport");
         assert!(matches!(
             err,
-            Error::Manager(McpManagerError::NotSseTransport { .. })
+            Error::Manager(McpManagerError::NotRemoteTransport { .. })
         ));
     }
 
