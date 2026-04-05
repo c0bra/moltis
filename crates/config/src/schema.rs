@@ -202,6 +202,7 @@ impl Default for ResolvedIdentity {
 #[serde(default)]
 pub struct MoltisConfig {
     pub server: ServerConfig,
+    pub ngrok: NgrokConfig,
     pub providers: ProvidersConfig,
     pub chat: ChatConfig,
     pub tools: ToolsConfig,
@@ -835,6 +836,23 @@ impl Default for ServerConfig {
     }
 }
 
+/// ngrok public HTTPS tunnel configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NgrokConfig {
+    /// Whether the ngrok tunnel is enabled.
+    pub enabled: bool,
+    /// ngrok authtoken. If unset, `NGROK_AUTHTOKEN` is used.
+    #[serde(
+        default,
+        serialize_with = "serialize_option_secret",
+        deserialize_with = "deserialize_option_secret"
+    )]
+    pub authtoken: Option<Secret<String>>,
+    /// Optional reserved/static domain to request from ngrok.
+    pub domain: Option<String>,
+}
+
 /// Failover configuration for automatic model/provider failover.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1289,10 +1307,10 @@ pub struct McpServerEntry {
     /// Optional per-server MCP request timeout override in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_timeout_secs: Option<u64>,
-    /// Transport type: "stdio" (default) or "sse".
+    /// Transport type: "stdio" (default), "sse", or "streamable-http".
     #[serde(default)]
     pub transport: String,
-    /// URL for SSE transport. Required when `transport` is "sse".
+    /// URL for SSE/Streamable HTTP transport. Required when `transport` is "sse" or "streamable-http".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Custom headers for remote HTTP/SSE transport.
@@ -1569,12 +1587,13 @@ pub enum MapProvider {
     OpenStreetMap,
 }
 
-/// Web tools configuration (search, fetch).
+/// Web tools configuration (search, fetch, firecrawl).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebConfig {
     pub search: WebSearchConfig,
     pub fetch: WebFetchConfig,
+    pub firecrawl: FirecrawlConfig,
 }
 
 /// Search provider selection.
@@ -1584,6 +1603,7 @@ pub enum SearchProvider {
     #[default]
     Brave,
     Perplexity,
+    Firecrawl,
 }
 
 /// Web search tool configuration.
@@ -1676,6 +1696,51 @@ impl Default for WebFetchConfig {
             max_redirects: 3,
             readability: true,
             ssrf_allowlist: Vec::new(),
+        }
+    }
+}
+
+/// Firecrawl integration configuration.
+///
+/// Firecrawl provides high-quality markdown extraction from web pages,
+/// including JS-heavy and bot-protected sites.  Used as a standalone
+/// `firecrawl_scrape` tool, as a `web_search` provider, and as a
+/// fallback extractor inside `web_fetch`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FirecrawlConfig {
+    /// Enable Firecrawl integration.
+    pub enabled: bool,
+    /// Firecrawl API key (overrides `FIRECRAWL_API_KEY` env var).
+    #[serde(
+        default,
+        serialize_with = "serialize_option_secret",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub api_key: Option<Secret<String>>,
+    /// Firecrawl API base URL (for self-hosted instances).
+    pub base_url: String,
+    /// Only extract main content (skip navs, footers, etc.).
+    pub only_main_content: bool,
+    /// HTTP request timeout in seconds.
+    pub timeout_seconds: u64,
+    /// In-memory cache TTL in minutes (0 to disable).
+    pub cache_ttl_minutes: u64,
+    /// Use Firecrawl as fallback in `web_fetch` when readability
+    /// extraction produces poor results.
+    pub web_fetch_fallback: bool,
+}
+
+impl Default for FirecrawlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            base_url: "https://api.firecrawl.dev".into(),
+            only_main_content: true,
+            timeout_seconds: 30,
+            cache_ttl_minutes: 15,
+            web_fetch_fallback: true,
         }
     }
 }
@@ -2169,6 +2234,12 @@ pub struct ProvidersConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub offered: Vec<String>,
 
+    /// Show models older than one year in the chat model selector.
+    /// By default only recent models are shown; legacy models remain
+    /// accessible in the settings page regardless of this flag.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_legacy_models: bool,
+
     /// Provider-specific settings keyed by provider name.
     /// Known keys: "anthropic", "openai", "gemini", "groq", "xai", "deepseek"
     #[serde(flatten)]
@@ -2376,6 +2447,10 @@ where
 
 const fn is_true(value: &bool) -> bool {
     *value
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 const fn is_default_provider_stream_transport(value: &ProviderStreamTransport) -> bool {

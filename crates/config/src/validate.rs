@@ -103,7 +103,7 @@ const KNOWN_PROVIDER_NAMES: &[&str] = &[
 ];
 
 /// Static metadata keys allowed directly under `[providers]`.
-const PROVIDERS_META_KEYS: &[&str] = &["offered"];
+const PROVIDERS_META_KEYS: &[&str] = &["offered", "show_legacy_models"];
 
 /// Build the full schema map mirroring every field in `schema.rs`.
 fn build_schema_map() -> KnownKeys {
@@ -198,6 +198,18 @@ fn build_schema_map() -> KnownKeys {
         ]))
     };
 
+    let firecrawl = || {
+        Struct(HashMap::from([
+            ("enabled", Leaf),
+            ("api_key", Leaf),
+            ("base_url", Leaf),
+            ("only_main_content", Leaf),
+            ("timeout_seconds", Leaf),
+            ("cache_ttl_minutes", Leaf),
+            ("web_fetch_fallback", Leaf),
+        ]))
+    };
+
     let exec = || {
         Struct(HashMap::from([
             ("default_timeout_secs", Leaf),
@@ -253,6 +265,7 @@ fn build_schema_map() -> KnownKeys {
                 Struct(HashMap::from([
                     ("search", web_search()),
                     ("fetch", web_fetch()),
+                    ("firecrawl", firecrawl()),
                 ])),
             ),
             ("maps", Struct(HashMap::from([("provider", Leaf)]))),
@@ -367,7 +380,10 @@ fn build_schema_map() -> KnownKeys {
         ),
         ("providers", MapWithFields {
             value: Box::new(provider_entry()),
-            fields: HashMap::from([("offered", Array(Box::new(Leaf)))]),
+            fields: HashMap::from([
+                ("offered", Array(Box::new(Leaf))),
+                ("show_legacy_models", Leaf),
+            ]),
         }),
         (
             "chat",
@@ -473,6 +489,14 @@ fn build_schema_map() -> KnownKeys {
                 ("search_merge_strategy", Leaf),
                 ("session_export", Leaf),
                 ("qmd", qmd()),
+            ])),
+        ),
+        (
+            "ngrok",
+            Struct(HashMap::from([
+                ("enabled", Leaf),
+                ("authtoken", Leaf),
+                ("domain", Leaf),
             ])),
         ),
         (
@@ -1097,6 +1121,41 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
                 message: "mcp server request_timeout_secs must be at least 1".into(),
             });
         }
+
+        if !server.transport.is_empty()
+            && !matches!(
+                server.transport.as_str(),
+                "stdio" | "sse" | "streamable-http" | "streamable_http" | "http"
+            )
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                category: "invalid-value",
+                path: format!("mcp.servers.{name}.transport"),
+                message: format!(
+                    "unknown transport type \"{}\"; expected \"stdio\", \"sse\", or \"streamable-http\"",
+                    server.transport
+                ),
+            });
+        }
+    }
+
+    // Firecrawl as search provider requires an API key.  We cannot check
+    // the FIRECRAWL_API_KEY env var here (static validation), so only emit
+    // an Info-level hint when neither config path supplies a key.
+    if config.tools.web.search.provider == crate::schema::SearchProvider::Firecrawl
+        && config.tools.web.firecrawl.api_key.is_none()
+        && config.tools.web.search.api_key.is_none()
+        && !config.tools.web.search.duckduckgo_fallback
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Info,
+            category: "unknown-provider",
+            path: "tools.web.search.provider".into(),
+            message: "search provider is 'firecrawl' but no API key found in config \
+                      (may be supplied at runtime via FIRECRAWL_API_KEY env var)"
+                .into(),
+        });
     }
 
     // agents.default_preset should reference an existing preset key.
@@ -1175,6 +1234,15 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
                 config.tailscale.mode,
                 valid_ts_modes.join(", ")
             ),
+        });
+    }
+
+    if config.ngrok.enabled && config.auth.disabled {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "security",
+            path: "ngrok.enabled".into(),
+            message: "ngrok is enabled while auth.disabled is true; remote visitors will be blocked with setup required until authentication is configured".into(),
         });
     }
 
@@ -1791,6 +1859,50 @@ mode = "tunnel"
         assert!(
             warning.is_some(),
             "expected warning for unknown tailscale mode 'tunnel'"
+        );
+    }
+
+    #[test]
+    fn ngrok_fields_are_recognized() {
+        let toml = r#"
+[ngrok]
+enabled = true
+authtoken = "secret"
+domain = "team-gateway.ngrok.app"
+"#;
+        let result = validate_toml_str(toml);
+        let unknown = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "unknown-field" && d.path.starts_with("ngrok."));
+        assert!(
+            unknown.is_none(),
+            "ngrok fields should be recognized, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn ngrok_with_disabled_auth_warns() {
+        let toml = r#"
+[ngrok]
+enabled = true
+
+[auth]
+disabled = true
+"#;
+        let result = validate_toml_str(toml);
+        let warning = result
+            .diagnostics
+            .iter()
+            .find(|d| d.category == "security" && d.path == "ngrok.enabled");
+        assert!(
+            warning.is_some(),
+            "expected security warning for ngrok.enabled with auth.disabled"
+        );
+        assert_eq!(
+            warning.unwrap().message,
+            "ngrok is enabled while auth.disabled is true; remote visitors will be blocked with setup required until authentication is configured"
         );
     }
 

@@ -212,10 +212,13 @@ async function moveToChannelStep(page) {
 	const channelHeading = page.getByRole("heading", { name: "Connect a Channel", exact: true });
 	if (await isVisible(channelHeading)) return true;
 
-	for (let i = 0; i < 4; i++) {
-		const skipBtn = page.getByRole("button", { name: "Skip for now", exact: true });
-		if (!(await isVisible(skipBtn))) break;
-		await skipBtn.click();
+	for (let i = 0; i < 6; i++) {
+		if (await clickFirstVisibleButton(page, { name: "Skip for now", exact: true })) {
+			if (await isVisible(channelHeading)) return true;
+			continue;
+		}
+
+		if (!(await clickFirstVisibleButton(page, { name: "Continue", exact: true }))) break;
 		if (await isVisible(channelHeading)) return true;
 	}
 
@@ -344,6 +347,19 @@ test.describe("Onboarding wizard", () => {
 		expect(importIdx).toBeLessThan(llmIdx);
 	});
 
+	test("step indicator orders Remote before Channel", async ({ page }) => {
+		await page.goto("/onboarding");
+		await page.waitForLoadState("networkidle");
+
+		const labels = (await page.locator(".onboarding-step-label").allTextContents()).map((value) => value.trim());
+		const remoteAccessIdx = labels.indexOf("Remote");
+		const channelIdx = labels.indexOf("Channel");
+
+		expect(remoteAccessIdx).toBeGreaterThan(-1);
+		expect(channelIdx).toBeGreaterThan(-1);
+		expect(remoteAccessIdx).toBeLessThan(channelIdx);
+	});
+
 	test("auth step renders actionable controls when shown", async ({ page }) => {
 		await page.goto("/onboarding");
 		await page.waitForLoadState("networkidle");
@@ -398,7 +414,7 @@ test.describe("Onboarding wizard", () => {
 			const currentHeading = page.locator(".onboarding-card h2").first();
 			await expect(currentHeading).toBeVisible();
 			const headingText = (await currentHeading.textContent())?.trim() || "";
-			expect(["Add LLMs", "Voice (optional)", "Connect a Channel"]).toContain(headingText);
+			expect(["Add LLMs", "Voice (optional)", "Remote Access", "Connect a Channel"]).toContain(headingText);
 			const canSkip = await clickFirstVisibleButton(page, { name: /skip/i });
 			const canContinue = await clickFirstVisibleButton(page, { name: /continue/i });
 			expect(canSkip || canContinue).toBeTruthy();

@@ -54,6 +54,8 @@ pub mod cron_tool;
 pub mod embedded_wasm;
 pub mod exec;
 pub mod file_io;
+#[cfg(feature = "firecrawl")]
+pub mod firecrawl;
 pub mod image_cache;
 pub mod location;
 pub mod map;

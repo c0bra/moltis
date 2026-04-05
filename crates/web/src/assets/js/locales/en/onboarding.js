@@ -7,6 +7,7 @@ export default {
 		identity: "Identity",
 		llm: "LLM",
 		voice: "Voice",
+		remoteAccess: "Remote",
 		channel: "Channel",
 		summary: "Summary",
 	},

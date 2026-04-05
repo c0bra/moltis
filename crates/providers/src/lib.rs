@@ -64,6 +64,9 @@ pub struct DiscoveredModel {
     /// Unix timestamp from the API (e.g. OpenAI `created` field).
     /// Used to sort models newest-first. `None` for static catalog entries.
     pub created_at: Option<i64>,
+    /// Flagged by the provider as a recommended/flagship model.
+    /// Used to surface the most relevant models in the UI.
+    pub recommended: bool,
 }
 
 impl DiscoveredModel {
@@ -72,6 +75,7 @@ impl DiscoveredModel {
             id: id.into(),
             display_name: display_name.into(),
             created_at: None,
+            recommended: false,
         }
     }
 
@@ -79,6 +83,26 @@ impl DiscoveredModel {
         self.created_at = created_at;
         self
     }
+
+    pub fn with_recommended(mut self, recommended: bool) -> Self {
+        self.recommended = recommended;
+        self
+    }
+}
+
+/// Convert a static model catalog into `DiscoveredModel` entries, marking
+/// the first `recommended_count` as recommended.
+pub fn catalog_to_discovered(
+    catalog: &[(&str, &str)],
+    recommended_count: usize,
+) -> Vec<DiscoveredModel> {
+    catalog
+        .iter()
+        .enumerate()
+        .map(|(i, (id, name))| {
+            DiscoveredModel::new(*id, *name).with_recommended(i < recommended_count)
+        })
+        .collect()
 }
 
 const MODEL_ID_NAMESPACE_SEP: &str = "::";
@@ -216,6 +240,7 @@ fn merge_preferred_and_discovered_models(
                 id: model_id,
                 display_name: d.display_name.clone(),
                 created_at: d.created_at,
+                recommended: d.recommended,
             }
         } else {
             DiscoveredModel::new(model_id.clone(), model_id)
@@ -258,6 +283,7 @@ fn merge_discovered_with_fallback_catalog(
                 id: m.id,
                 display_name,
                 created_at: m.created_at,
+                recommended: m.recommended,
             }
         })
         .collect()
@@ -825,11 +851,16 @@ pub struct ModelInfo {
     /// Unix timestamp from the provider API (e.g. OpenAI `created` field).
     /// `None` for static catalog entries.
     pub created_at: Option<i64>,
+    /// Flagged by the provider as a recommended/flagship model.
+    pub recommended: bool,
 }
 
 /// Known Anthropic Claude models (model_id, display_name).
 /// Current models listed first, then legacy models.
 const ANTHROPIC_MODELS: &[(&str, &str)] = &[
+    ("claude-opus-4-6-20260301", "Claude Opus 4.6"),
+    ("claude-sonnet-4-6-20260301", "Claude Sonnet 4.6"),
+    ("claude-haiku-4-6-20260301", "Claude Haiku 4.6"),
     ("claude-opus-4-5-20251101", "Claude Opus 4.5"),
     ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"),
     ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
@@ -1272,6 +1303,7 @@ impl ProviderRegistry {
                     provider: source.provider_name().to_string(),
                     display_name: source.display_name(&model.id, &model.display_name),
                     created_at: model.created_at,
+                    recommended: model.recommended,
                 },
                 provider,
             );
@@ -1318,6 +1350,7 @@ impl ProviderRegistry {
                         provider: source.provider_name().to_string(),
                         display_name: source.display_name(&model.id, &model.display_name),
                         created_at: model.created_at,
+                        recommended: model.recommended,
                     },
                     source.build_provider(model.id, config),
                 )
@@ -1713,6 +1746,7 @@ impl ProviderRegistry {
                     provider: genai_provider_name,
                     display_name: display_name.into(),
                     created_at: None,
+                    recommended: false,
                 },
                 provider,
             );
@@ -1763,6 +1797,7 @@ impl ProviderRegistry {
                 provider: provider_label,
                 display_name: "GPT-4o (async-openai)".into(),
                 created_at: None,
+                recommended: false,
             },
             provider,
         );
@@ -1904,17 +1939,18 @@ impl ProviderRegistry {
 
         let preferred = configured_models_for_provider(config, "kimi-code");
         let discovered = if should_fetch_models(config, "kimi-code") {
-            kimi_code::KIMI_CODE_MODELS
-                .iter()
-                .map(|(id, name)| DiscoveredModel::new(*id, *name))
-                .collect()
+            catalog_to_discovered(kimi_code::KIMI_CODE_MODELS, 1)
         } else {
             Vec::new()
         };
         let models = merge_preferred_and_discovered_models(preferred, discovered);
         for model in models {
-            let (model_id, display_name, created_at) =
-                (model.id, model.display_name, model.created_at);
+            let (model_id, display_name, created_at, recommended) = (
+                model.id,
+                model.display_name,
+                model.created_at,
+                model.recommended,
+            );
             if self.has_provider_model("kimi-code", &model_id) {
                 continue;
             }
@@ -1925,6 +1961,7 @@ impl ProviderRegistry {
                     provider: "kimi-code".into(),
                     display_name,
                     created_at,
+                    recommended,
                 },
                 provider,
             );
@@ -2004,6 +2041,7 @@ impl ProviderRegistry {
                     provider: "local-llm".into(),
                     display_name,
                     created_at: None,
+                    recommended: false,
                 },
                 provider,
             );
@@ -2036,18 +2074,19 @@ impl ProviderRegistry {
                 .unwrap_or(moltis_config::CacheRetention::Short);
             let preferred = configured_models_for_provider(config, "anthropic");
             let discovered = if should_fetch_models(config, "anthropic") {
-                ANTHROPIC_MODELS
-                    .iter()
-                    .map(|(id, name)| DiscoveredModel::new(*id, *name))
-                    .collect()
+                catalog_to_discovered(ANTHROPIC_MODELS, 3)
             } else {
                 Vec::new()
             };
             let models = merge_preferred_and_discovered_models(preferred, discovered);
 
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let (model_id, display_name, created_at, recommended) = (
+                    model.id,
+                    model.display_name,
+                    model.created_at,
+                    model.recommended,
+                );
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
@@ -2066,6 +2105,7 @@ impl ProviderRegistry {
                         provider: provider_label.clone(),
                         display_name,
                         created_at,
+                        recommended,
                     },
                     provider,
                 );
@@ -2107,8 +2147,12 @@ impl ProviderRegistry {
             let models = merge_preferred_and_discovered_models(preferred, discovered);
 
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let (model_id, display_name, created_at, recommended) = (
+                    model.id,
+                    model.display_name,
+                    model.created_at,
+                    model.recommended,
+                );
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
@@ -2127,6 +2171,7 @@ impl ProviderRegistry {
                         provider: provider_label.clone(),
                         display_name,
                         created_at,
+                        recommended,
                     },
                     provider,
                 );
@@ -2200,12 +2245,8 @@ impl ProviderRegistry {
                 .get(def.config_name)
                 .is_some_and(|entry| entry.fetch_models);
             let try_fetch = def.supports_model_discovery || user_opted_in;
-            let static_catalog = || -> Vec<DiscoveredModel> {
-                def.models
-                    .iter()
-                    .map(|(id, name)| DiscoveredModel::new(*id, *name))
-                    .collect()
-            };
+            let static_catalog =
+                || -> Vec<DiscoveredModel> { catalog_to_discovered(def.models, 2) };
             let discovered =
                 if !skip_discovery && try_fetch && should_fetch_models(config, def.config_name) {
                     // Use pre-fetched results from parallel discovery.
@@ -2239,8 +2280,12 @@ impl ProviderRegistry {
             };
 
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let (model_id, display_name, created_at, recommended) = (
+                    model.id,
+                    model.display_name,
+                    model.created_at,
+                    model.recommended,
+                );
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
@@ -2279,6 +2324,7 @@ impl ProviderRegistry {
                         provider: provider_label.clone(),
                         display_name,
                         created_at,
+                        recommended,
                     },
                     provider,
                 );
@@ -2333,8 +2379,12 @@ impl ProviderRegistry {
 
             let custom_tool_mode = entry.tool_mode;
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let (model_id, display_name, created_at, recommended) = (
+                    model.id,
+                    model.display_name,
+                    model.created_at,
+                    model.recommended,
+                );
                 if self.has_provider_model(name, &model_id) {
                     continue;
                 }
@@ -2358,6 +2408,7 @@ impl ProviderRegistry {
                         provider: name.clone(),
                         display_name,
                         created_at,
+                        recommended,
                     },
                     provider,
                 );
@@ -2438,6 +2489,7 @@ impl ProviderRegistry {
                         provider: m.provider.clone(),
                         display_name: format!("{} ({label} reasoning)", m.display_name),
                         created_at: m.created_at,
+                        recommended: false,
                     });
                 }
             }
@@ -2950,6 +3002,7 @@ mod tests {
                 provider: "test".into(),
                 display_name: "Test Model".into(),
                 created_at: None,
+                recommended: false,
             },
             provider,
         );
@@ -2978,6 +3031,7 @@ mod tests {
                 provider: "openai-codex".into(),
                 display_name: "GPT-5.2 Codex (Codex/OAuth)".into(),
                 created_at: None,
+                recommended: false,
             },
             provider,
         );
@@ -3391,6 +3445,7 @@ mod tests {
                     provider: prov.into(),
                     display_name: id.into(),
                     created_at: None,
+                    recommended: false,
                 },
                 Arc::new(openai::OpenAiProvider::new_with_name(
                     secret("k"),
@@ -3446,6 +3501,7 @@ mod tests {
                     provider: prov.into(),
                     display_name: id.into(),
                     created_at: None,
+                    recommended: false,
                 },
                 Arc::new(openai::OpenAiProvider::new_with_name(
                     secret("k"),
@@ -3476,6 +3532,7 @@ mod tests {
                     provider: prov.into(),
                     display_name: id.into(),
                     created_at: None,
+                    recommended: false,
                 },
                 Arc::new(openai::OpenAiProvider::new_with_name(
                     secret("k"),
@@ -3506,6 +3563,7 @@ mod tests {
                     provider: prov.into(),
                     display_name: id.into(),
                     created_at: None,
+                    recommended: false,
                 },
                 Arc::new(openai::OpenAiProvider::new_with_name(
                     secret("k"),
@@ -4058,6 +4116,7 @@ mod tests {
                 provider: "anthropic".into(),
                 display_name: "Claude Opus 4.5".into(),
                 created_at: None,
+                recommended: false,
             },
             Arc::new(anthropic::AnthropicProvider::new(
                 secret("key"),
@@ -4089,6 +4148,7 @@ mod tests {
                 provider: "anthropic".into(),
                 display_name: "Claude Opus 4.5".into(),
                 created_at: None,
+                recommended: false,
             },
             Arc::new(anthropic::AnthropicProvider::new(
                 secret("key"),
@@ -4102,6 +4162,7 @@ mod tests {
                 provider: "openai".into(),
                 display_name: "GPT-4o".into(),
                 created_at: None,
+                recommended: false,
             },
             Arc::new(openai::OpenAiProvider::new(
                 secret("key"),

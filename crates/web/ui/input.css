@@ -1748,6 +1748,9 @@
     .onboarding-step-label {
       font-size: 0.62rem;
     }
+    .onboarding-step {
+      width: 56px;
+    }
   }
   @media (max-width: 480px) {
     .onboarding-card {
@@ -1773,6 +1776,7 @@
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
+    width: 64px;
   }
   .onboarding-step-dot {
     width: 28px;
@@ -1813,7 +1817,9 @@
   .onboarding-step-label {
     font-size: 0.68rem;
     color: var(--muted);
-    white-space: nowrap;
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
   }
   .onboarding-step.active .onboarding-step-label {
     color: var(--text-strong);

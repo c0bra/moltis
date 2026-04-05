@@ -1,7 +1,7 @@
 // ── Provider modal ──────────────────────────────────────
 
 import { onEvent } from "./events.js";
-import { sendRpc } from "./helpers.js";
+import { modelVersionScore, sendRpc } from "./helpers.js";
 import { ensureProviderModal } from "./modals.js";
 import { fetchModels } from "./models.js";
 import { providerApiKeyHelp } from "./provider-key-help.js";
@@ -1185,15 +1185,18 @@ function showMultiModelSelector(providerName, providerDisplayName, models, saved
 		statusArea.textContent = count === 0 ? "No models selected" : `${count} model${count > 1 ? "s" : ""} selected`;
 	}
 
-	function modelSortKey(m) {
-		return { selected: selectedIds.has(m.id) ? 0 : 1, time: m.createdAt || 0, name: m.displayName || m.id };
-	}
-
 	function sortModelsForSelection(items) {
 		return [...items].sort((a, b) => {
-			var ka = modelSortKey(a);
-			var kb = modelSortKey(b);
-			return ka.selected - kb.selected || kb.time - ka.time || ka.name.localeCompare(kb.name);
+			var aSel = selectedIds.has(a.id) ? 0 : 1;
+			var bSel = selectedIds.has(b.id) ? 0 : 1;
+			if (aSel !== bSel) return aSel - bSel;
+			var aTime = a.createdAt || 0;
+			var bTime = b.createdAt || 0;
+			if (aTime !== bTime) return bTime - aTime;
+			var aVer = modelVersionScore(a.id);
+			var bVer = modelVersionScore(b.id);
+			if (aVer !== bVer) return bVer - aVer;
+			return (a.displayName || a.id).localeCompare(b.displayName || b.id);
 		});
 	}
 
@@ -1245,7 +1248,6 @@ function showMultiModelSelector(providerName, providerDisplayName, models, saved
 				var unsupBadge = document.createElement("span");
 				unsupBadge.className = probe.timeout ? "tier-badge" : "provider-item-badge warning";
 				unsupBadge.textContent = probe.timeout ? "Slow" : "Unsupported";
-				unsupBadge.title = probe.error || "";
 				badges.appendChild(unsupBadge);
 			}
 			header.appendChild(badges);
@@ -1255,6 +1257,13 @@ function showMultiModelSelector(providerName, providerDisplayName, models, saved
 			idLine.className = "text-xs text-[var(--muted)] mt-1 font-mono";
 			idLine.textContent = mdl.id;
 			card.appendChild(idLine);
+
+			if (probe && probe !== "ok" && probe !== "probing" && probe.error) {
+				var errorLine = document.createElement("div");
+				errorLine.className = "text-xs font-medium text-[var(--danger,#ef4444)] mt-0.5";
+				errorLine.textContent = probe.error;
+				card.appendChild(errorLine);
+			}
 
 			if (mdl.createdAt) {
 				var dateLine = document.createElement("time");

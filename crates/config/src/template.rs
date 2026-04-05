@@ -93,6 +93,7 @@ auto_generate = true              # Auto-generate local CA and server certificat
 
 [providers]
 offered = ["local-llm", "github-copilot", "openai-codex", "openai", "anthropic", "openrouter", "ollama", "moonshot", "minimax", "zai"] # Enabled providers and those shown in onboarding/picker UI ([] = enable/show all)
+# show_legacy_models = true  # Show models older than 1 year in the chat model selector (they always appear in Settings)
 # All available providers:
 #   "anthropic", "openai", "gemini", "groq", "xai", "deepseek",
 #   "fireworks", "mistral", "openrouter", "cerebras", "minimax",
@@ -406,6 +407,21 @@ max_redirects = 3                 # Maximum HTTP redirects to follow
 readability = true                # Use readability extraction for HTML (cleaner output)
 # ssrf_allowlist = ["172.22.0.0/16"] # CIDR ranges exempt from SSRF blocking (e.g. Docker networks)
 
+# ── Firecrawl (API-based web scraping) ────────────────────────────────────────
+# High-quality markdown extraction from web pages, including JS-heavy and
+# bot-protected sites.  Used as a standalone firecrawl_scrape tool, as a
+# web_search provider, and as a fallback extractor in web_fetch.
+# Get an API key at https://firecrawl.dev or self-host.
+
+# [tools.web.firecrawl]
+# enabled = false                        # Enable Firecrawl integration
+# api_key = "fc-..."                     # Or set FIRECRAWL_API_KEY env var
+# base_url = "https://api.firecrawl.dev" # API endpoint (change for self-hosted)
+# only_main_content = true               # Strip navs, footers, sidebars
+# timeout_seconds = 30                   # HTTP request timeout
+# cache_ttl_minutes = 15                 # Cache scraped pages (0 = no cache)
+# web_fetch_fallback = true              # Use as fallback when readability fails
+
 # ── Browser Automation ────────────────────────────────────────────────────────
 # Full browser control via Chrome DevTools Protocol (CDP).
 # Use for JavaScript-heavy sites, form filling, screenshots.
@@ -467,9 +483,9 @@ request_timeout_secs = 30        # Default timeout for MCP requests
 # env = {{ KEY = "value" }}         # Environment variables for the process
 # enabled = true                  # Whether this server is enabled
 # request_timeout_secs = 90       # Optional timeout override for this server
-# transport = "stdio"             # Transport: "stdio" (default) or "sse"
-# url = "http://..."              # URL for SSE transport
-# headers = {{ Authorization = "Bearer ${{TOKEN}}" }}  # Optional HTTP headers for SSE transport
+# transport = "stdio"             # Transport: "stdio" (default), "sse", or "streamable-http"
+# url = "http://..."              # URL for SSE/Streamable HTTP transport
+# headers = {{ Authorization = "Bearer ${{TOKEN}}" }}  # Optional HTTP headers for remote transport
 
 # Example: Filesystem access
 # [mcp.servers.filesystem]
@@ -489,6 +505,13 @@ request_timeout_secs = 30        # Default timeout for MCP requests
 # transport = "sse"
 # url = "http://localhost:8080/mcp?api_key=$REMOTE_MCP_KEY"
 # headers = {{ "x-api-key" = "${{REMOTE_MCP_KEY}}" }}
+# enabled = true
+
+# Example: Streamable HTTP server
+# [mcp.servers.remote-http]
+# transport = "streamable-http"
+# url = "https://mcp.example.com/mcp"
+# headers = {{ Authorization = "Bearer ${{API_KEY}}" }}
 # enabled = true
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -561,6 +584,17 @@ providers = ["whisper", "mistral", "elevenlabs"] # UI allowlist (empty = show al
 # [voice.tts.openai]
 # voice = "alloy"                 # alloy, echo, fable, onyx, nova, shimmer
 # model = "tts-1"                 # tts-1 or tts-1-hd
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NGROK
+# ══════════════════════════════════════════════════════════════════════════════
+# Expose moltis through a public HTTPS tunnel managed by ngrok.
+# Requires a build with the `ngrok` feature and an ngrok authtoken.
+
+[ngrok]
+enabled = false                   # true = create a public HTTPS tunnel at startup
+# authtoken = "${{NGROK_AUTHTOKEN}}" # Optional if NGROK_AUTHTOKEN env var is already set
+# domain = "team-gateway.ngrok.app"  # Optional reserved/static ngrok domain
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAILSCALE

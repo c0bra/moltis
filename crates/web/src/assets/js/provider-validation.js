@@ -29,8 +29,11 @@ export function humanizeProbeError(error) {
 	) {
 		return "Invalid API key. Please double-check and try again.";
 	}
-	if (lower.includes("403") || lower.includes("forbidden") || lower.includes("permission")) {
+	if (lower.includes("403") || lower.includes("forbidden")) {
 		return "Your API key doesn't have access. Check your account permissions.";
+	}
+	if (lower.includes("permission")) {
+		return error;
 	}
 	if (lower.includes("429") || lower.includes("rate limit") || lower.includes("too many requests")) {
 		return "Rate limited by the provider. Wait a moment and try again.";
@@ -98,7 +101,7 @@ export async function testModel(modelId) {
 			return { ok: true };
 		}
 
-		var message = res?.error?.message || "Model test failed.";
+		var message = res?.error?.serverMessage || res?.error?.message || "Model test failed.";
 		var lower = String(message).toLowerCase();
 		var shouldRetry = lower.includes(MODEL_SERVICE_NOT_CONFIGURED) && attempt < MODEL_TEST_RETRY_ATTEMPTS - 1;
 
