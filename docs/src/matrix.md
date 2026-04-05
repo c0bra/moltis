@@ -227,7 +227,7 @@ When you add Matrix through the web UI:
 - the homeserver field defaults to `https://matrix.org`
 - Moltis auto-generates the internal `account_id`
 - the saved account lives in `data_dir()/moltis.db`, not in `moltis.toml`
-- encrypted Matrix chats require password auth
+- the web UI defaults to password auth because encrypted Matrix chats require it
 - password-based channels default to **Let Moltis own this Matrix account**
 - access-token auth is for plain Matrix traffic only, because Moltis cannot import the existing device's private E2EE keys from an access token
 - if you switch a channel to user-managed mode, the Channels page shows the homeserver, user ID, device ID, and device name you need to open that bot account in Element

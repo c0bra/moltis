@@ -1140,7 +1140,7 @@ function AddMatrixModal() {
 	var userAllowlistItems = useSignal([]);
 	var roomAllowlistItems = useSignal([]);
 	var homeserverDraft = useSignal(MATRIX_DEFAULT_HOMESERVER);
-	var authModeDraft = useSignal("access_token");
+	var authModeDraft = useSignal("password");
 	var userIdDraft = useSignal("");
 	var credentialDraft = useSignal("");
 	var deviceDisplayNameDraft = useSignal("");
@@ -1209,7 +1209,7 @@ function AddMatrixModal() {
 				userAllowlistItems.value = [];
 				roomAllowlistItems.value = [];
 				homeserverDraft.value = MATRIX_DEFAULT_HOMESERVER;
-				authModeDraft.value = "access_token";
+				authModeDraft.value = "password";
 				userIdDraft.value = "";
 				credentialDraft.value = "";
 				deviceDisplayNameDraft.value = "";
@@ -1238,7 +1238,7 @@ function AddMatrixModal() {
 	        <div>
 	          <span class="text-xs font-medium text-[var(--text-strong)]">Connect a Matrix bot user</span>
 	          <div class="text-xs text-[var(--muted)] channel-help">1. Leave the homeserver as <span class="font-mono">${MATRIX_DEFAULT_HOMESERVER}</span> for matrix.org accounts</div>
-	          <div class="text-xs text-[var(--muted)]">2. Use Password if you want encrypted Matrix chats. Access token auth is for plain Matrix traffic only</div>
+	          <div class="text-xs text-[var(--muted)]">2. Password is the default because it supports encrypted Matrix chats. Access token auth is only for plain Matrix traffic</div>
 	          <div class="text-xs text-[var(--muted)]">3. Moltis generates the local account ID automatically from the Matrix user or homeserver</div>
 	        </div>
 	      </div>
@@ -1262,8 +1262,8 @@ function AddMatrixModal() {
 	        onChange=${(e) => {
 						authModeDraft.value = normalizeMatrixAuthMode(e.target.value);
 					}}>
-	        <option value="access_token">Access token</option>
 	        <option value="password">Password</option>
+	        <option value="access_token">Access token</option>
 	      </select>
 	      <div class="text-xs text-[var(--muted)]">${matrixAuthModeGuidance(authModeDraft.value)}</div>
 	      ${

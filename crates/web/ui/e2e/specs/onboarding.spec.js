@@ -670,9 +670,9 @@ test.describe("Onboarding wizard", () => {
 			});
 		});
 
-		await homeserverInput.fill("https://matrix.example.com");
 		const authSelect = page.getByText("Authentication", { exact: true }).locator("xpath=following-sibling::select[1]");
-		await authSelect.selectOption("password");
+		await expect(authSelect).toHaveValue("password");
+		await homeserverInput.fill("https://matrix.example.com");
 		await expect(page.getByLabel("Let Moltis own this Matrix account", { exact: true })).toBeChecked();
 		await authSelect.selectOption("access_token");
 		await page.locator('input[name="matrix_credential"]').fill("syt_test_token");

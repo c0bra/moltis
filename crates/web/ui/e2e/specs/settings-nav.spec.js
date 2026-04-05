@@ -574,7 +574,7 @@ test.describe("Settings navigation", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
-	test("channels add matrix defaults to matrix.org and auto-generates an account id", async ({ page }) => {
+	test("channels add matrix supports access token auth and auto-generates an account id", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await navigateAndWait(page, "/settings/channels");
 		await waitForWsConnected(page);
@@ -588,13 +588,8 @@ test.describe("Settings navigation", () => {
 		await expect(page.locator('input[data-field="accountId"]')).toHaveCount(0);
 		await expect(page.locator('input[data-field="homeserver"]')).toHaveValue("https://matrix.org");
 		await expect(page.locator('input[data-field="homeserver"]')).toHaveAttribute("placeholder", "https://matrix.org");
-		await expect(page.getByText("Settings -> Help & About -> Advanced -> Access Token")).toBeVisible();
 		await expect(page.getByText("Encrypted Matrix chats require Password auth.", { exact: false })).toBeVisible();
-		await expect(page.getByText("Use Password if you want encrypted Matrix chats.", { exact: false })).toBeVisible();
-		await expect(
-			page.getByText("do not transfer that device's private encryption keys into Moltis", { exact: false }),
-		).toBeVisible();
-		await expect(page.getByText("Access token auth always stays user-managed", { exact: false })).toBeVisible();
+		await expect(page.getByText("Password is the default because it supports encrypted Matrix chats.", { exact: false })).toBeVisible();
 		await expect(page.getByText("verify yes", { exact: false })).toBeVisible();
 		await expect(page.getByRole("link", { name: "Matrix setup docs", exact: true })).toHaveAttribute(
 			"href",
@@ -633,6 +628,12 @@ test.describe("Settings navigation", () => {
 		});
 
 		await page.locator('input[data-field="homeserver"]').fill("https://matrix.example.com");
+		await page.locator('select[data-field="authMode"]').selectOption("access_token");
+		await expect(page.getByText("Settings -> Help & About -> Advanced -> Access Token")).toBeVisible();
+		await expect(page.getByText("Access token auth always stays user-managed", { exact: false })).toBeVisible();
+		await expect(
+			page.getByText("do not transfer that device's private encryption keys into Moltis", { exact: false }),
+		).toBeVisible();
 		await page.locator('input[data-field="credential"]').fill("syt_test_token");
 		await page.getByText("Advanced Config JSON", { exact: true }).click();
 		await page
@@ -677,6 +678,7 @@ test.describe("Settings navigation", () => {
 		await addButton.click();
 
 		await expect(page.getByRole("heading", { name: "Connect Matrix", exact: true })).toBeVisible();
+		await expect(page.locator('select[data-field="authMode"]')).toHaveValue("password");
 
 		await page.evaluate(async () => {
 			const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');

@@ -3024,7 +3024,7 @@ function DiscordForm({ onConnected, error, setError }) {
 
 function MatrixForm({ onConnected, error, setError }) {
 	var [homeserver, setHomeserver] = useState(MATRIX_DEFAULT_HOMESERVER);
-	var [authMode, setAuthMode] = useState("access_token");
+	var [authMode, setAuthMode] = useState("password");
 	var [userId, setUserId] = useState("");
 	var [credential, setCredential] = useState("");
 	var [deviceDisplayName, setDeviceDisplayName] = useState("");
@@ -3105,7 +3105,7 @@ function MatrixForm({ onConnected, error, setError }) {
 		<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-1">
 			<span class="font-medium text-[var(--text-strong)]">Connect a Matrix bot user</span>
 			<span>1. Leave the homeserver as <span class="font-mono">${MATRIX_DEFAULT_HOMESERVER}</span> for matrix.org accounts</span>
-			<span>2. Use Password if you want encrypted Matrix chats. Access token auth is for plain Matrix traffic only</span>
+			<span>2. Password is the default because it supports encrypted Matrix chats. Access token auth is only for plain Matrix traffic</span>
 			<span>3. Moltis generates the local account ID automatically from the Matrix user or homeserver</span>
 		</div>
 		<div class="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-100 flex flex-col gap-1">
@@ -3123,8 +3123,8 @@ function MatrixForm({ onConnected, error, setError }) {
 		<div>
 			<label class="text-xs text-[var(--muted)] mb-1 block">Authentication</label>
 			<select class="provider-key-input w-full cursor-pointer" value=${authMode} onChange=${(e) => setAuthMode(normalizeMatrixAuthMode(e.target.value))}>
-				<option value="access_token">Access token</option>
 				<option value="password">Password</option>
+				<option value="access_token">Access token</option>
 			</select>
 			<div class="text-xs text-[var(--muted)] mt-1">${matrixAuthModeGuidance(authMode)}</div>
 		</div>
