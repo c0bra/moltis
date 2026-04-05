@@ -11102,8 +11102,7 @@ dependencies = [
 [[package]]
 name = "sqlx-core"
 version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
+source = "git+https://github.com/moltis-org/sqlx?rev=33747ad2e2d0c7962c6450faf31591c4e0782c23#33747ad2e2d0c7962c6450faf31591c4e0782c23"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -11253,6 +11252,7 @@ dependencies = [
 [[package]]
 name = "sqlx-sqlite"
 version = "0.8.6"
+source = "git+https://github.com/moltis-org/sqlx?rev=33747ad2e2d0c7962c6450faf31591c4e0782c23#33747ad2e2d0c7962c6450faf31591c4e0782c23"
 dependencies = [
  "atoi",
  "flume",
