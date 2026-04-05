@@ -52,6 +52,17 @@ pub enum AutoJoinPolicy {
     Off,
 }
 
+/// Who manages the Matrix account's encryption ownership.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MatrixOwnershipMode {
+    /// Moltis should not attempt to bootstrap cross-signing or recovery.
+    #[default]
+    UserManaged,
+    /// Moltis should bootstrap and manage this dedicated bot account.
+    MoltisOwned,
+}
+
 /// Configuration for a single Matrix account.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -82,6 +93,9 @@ pub struct MatrixAccountConfig {
     /// Optional display name for new login devices.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_display_name: Option<String>,
+
+    /// Who manages the account's encryption ownership.
+    pub ownership_mode: MatrixOwnershipMode,
 
     /// DM access policy.
     pub dm_policy: DmPolicy,
@@ -150,6 +164,7 @@ impl Default for MatrixAccountConfig {
             user_id: None,
             device_id: None,
             device_display_name: None,
+            ownership_mode: MatrixOwnershipMode::UserManaged,
             dm_policy: DmPolicy::Allowlist,
             room_policy: GroupPolicy::Allowlist,
             mention_mode: MentionMode::Mention,
@@ -180,6 +195,7 @@ impl std::fmt::Debug for MatrixAccountConfig {
             .field("user_id", &self.user_id)
             .field("device_id", &self.device_id)
             .field("device_display_name", &self.device_display_name)
+            .field("ownership_mode", &self.ownership_mode)
             .field("dm_policy", &self.dm_policy)
             .field("room_policy", &self.room_policy)
             .field("mention_mode", &self.mention_mode)
@@ -207,7 +223,7 @@ pub struct RedactedConfig<'a>(pub &'a MatrixAccountConfig);
 impl Serialize for RedactedConfig<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let c = self.0;
-        let mut count = 15;
+        let mut count = 16;
         count += c.password.is_some() as usize;
         count += c.user_id.is_some() as usize;
         count += c.device_id.is_some() as usize;
@@ -233,6 +249,7 @@ impl Serialize for RedactedConfig<'_> {
         if c.device_display_name.is_some() {
             s.serialize_field("device_display_name", &c.device_display_name)?;
         }
+        s.serialize_field("ownership_mode", &c.ownership_mode)?;
         s.serialize_field("dm_policy", &c.dm_policy)?;
         s.serialize_field("room_policy", &c.room_policy)?;
         s.serialize_field("mention_mode", &c.mention_mode)?;
@@ -324,6 +341,7 @@ mod tests {
             "homeserver": "https://matrix.example.com",
             "access_token": "syt_test_token",
             "password": "wordpass",
+            "ownership_mode": "moltis_owned",
             "dm_policy": "allowlist",
             "room_policy": "allowlist",
             "mention_mode": "mention",
@@ -354,6 +372,7 @@ mod tests {
             Some("wordpass")
         );
         assert_eq!(cfg.dm_policy, DmPolicy::Allowlist);
+        assert_eq!(cfg.ownership_mode, MatrixOwnershipMode::MoltisOwned);
         assert_eq!(cfg.room_allowlist, vec!["!room:example.com"]);
         assert_eq!(cfg.mention_mode, MentionMode::Mention);
         assert_eq!(cfg.auto_join, AutoJoinPolicy::Allowlist);
@@ -376,6 +395,7 @@ mod tests {
         assert_eq!(cfg.dm_policy, DmPolicy::Allowlist);
         assert_eq!(cfg.room_policy, GroupPolicy::Allowlist);
         assert_eq!(cfg.mention_mode, MentionMode::Mention);
+        assert_eq!(cfg.ownership_mode, MatrixOwnershipMode::UserManaged);
         assert_eq!(cfg.auto_join, AutoJoinPolicy::Always);
         assert_eq!(cfg.stream_mode, StreamMode::EditInPlace);
         assert_eq!(cfg.edit_throttle_ms, 500);
@@ -476,6 +496,7 @@ mod tests {
         assert_eq!(value["stream_mode"], "edit_in_place");
         assert_eq!(value["edit_throttle_ms"], 500);
         assert_eq!(value["stream_min_initial_chars"], 30);
+        assert_eq!(value["ownership_mode"], "user_managed");
         assert_eq!(value["access_token"], "[REDACTED]");
     }
 }

@@ -671,6 +671,10 @@ test.describe("Onboarding wizard", () => {
 		});
 
 		await homeserverInput.fill("https://matrix.example.com");
+		const authSelect = page.getByText("Authentication", { exact: true }).locator("xpath=following-sibling::select[1]");
+		await authSelect.selectOption("password");
+		await expect(page.getByLabel("Let Moltis own this Matrix account", { exact: true })).toBeChecked();
+		await authSelect.selectOption("access_token");
 		await page.locator('input[name="matrix_credential"]').fill("syt_test_token");
 		await page.getByText("Advanced Config JSON", { exact: true }).click();
 		await page
@@ -685,6 +689,7 @@ test.describe("Onboarding wizard", () => {
 		expect(sentRequest.config).toMatchObject({
 			homeserver: "https://matrix.example.com",
 			access_token: "syt_test_token",
+			ownership_mode: "user_managed",
 			otp_self_approval: true,
 			otp_cooldown_secs: 300,
 			reply_to_message: true,

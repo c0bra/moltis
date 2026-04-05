@@ -5,7 +5,7 @@ use std::{
 
 use {
     async_trait::async_trait,
-    matrix_sdk::encryption::VerificationState,
+    matrix_sdk::encryption::{VerificationState, recovery::RecoveryState},
     tracing::{info, instrument, warn},
 };
 
@@ -21,9 +21,9 @@ use moltis_channels::{
 
 use crate::{
     client,
-    config::{MatrixAccountConfig, RedactedConfig},
+    config::{MatrixAccountConfig, MatrixOwnershipMode, RedactedConfig},
     outbound::MatrixOutbound,
-    state::{AccountState, AccountStateMap},
+    state::{AccountState, AccountStateMap, VerificationPrompt},
 };
 
 fn verification_state_label(state: VerificationState) -> &'static str {
@@ -34,27 +34,66 @@ fn verification_state_label(state: VerificationState) -> &'static str {
     }
 }
 
-fn matrix_status_extra(state: &AccountState) -> serde_json::Value {
-    let verification_state = state.client.encryption().verification_state().get();
-    let prompts = {
-        let verification = state
-            .verification
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let mut prompts = verification.prompts.values().cloned().collect::<Vec<_>>();
-        prompts.sort_by(|left, right| left.other_user_id.cmp(&right.other_user_id));
-        prompts
-    };
+fn recovery_state_label(state: RecoveryState) -> &'static str {
+    match state {
+        RecoveryState::Unknown => "unknown",
+        RecoveryState::Enabled => "enabled",
+        RecoveryState::Disabled => "disabled",
+        RecoveryState::Incomplete => "incomplete",
+    }
+}
 
+fn ownership_mode_label(mode: MatrixOwnershipMode) -> &'static str {
+    match mode {
+        MatrixOwnershipMode::UserManaged => "user_managed",
+        MatrixOwnershipMode::MoltisOwned => "moltis_owned",
+    }
+}
+
+struct MatrixStatusSnapshot {
+    client: matrix_sdk::Client,
+    config: MatrixAccountConfig,
+    prompts: Vec<VerificationPrompt>,
+    startup_error: Option<String>,
+}
+
+async fn matrix_status_extra(snapshot: MatrixStatusSnapshot) -> serde_json::Value {
+    let verification_state = snapshot.client.encryption().verification_state().get();
+    let cross_signing_complete = snapshot
+        .client
+        .encryption()
+        .cross_signing_status()
+        .await
+        .is_some_and(|status| status.is_complete());
+    let device_verified_by_owner = snapshot
+        .client
+        .encryption()
+        .get_own_device()
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|device| device.is_cross_signed_by_owner());
     serde_json::json!({
         "matrix": {
             "verification_state": verification_state_label(verification_state),
-            "pending_verifications": prompts.iter().map(|prompt| serde_json::json!({
+            "pending_verifications": snapshot.prompts.iter().map(|prompt| serde_json::json!({
                 "flow_id": prompt.flow_id,
                 "other_user_id": prompt.other_user_id,
                 "room_id": prompt.room_id,
                 "emoji_lines": prompt.emoji_lines,
             })).collect::<Vec<_>>(),
+            "ownership_mode": ownership_mode_label(snapshot.config.ownership_mode.clone()),
+            "auth_mode": match client::auth_mode(&snapshot.config) {
+                Ok(client::AuthMode::Password) => "password",
+                _ => "access_token",
+            },
+            "user_id": snapshot.client.user_id().map(|user_id| user_id.to_string()).or_else(|| snapshot.config.user_id.clone()),
+            "device_id": snapshot.client.device_id().map(|device_id| device_id.to_string()).or_else(|| snapshot.config.device_id.clone()),
+            "device_display_name": snapshot.config.device_display_name,
+            "cross_signing_complete": cross_signing_complete,
+            "device_verified_by_owner": device_verified_by_owner,
+            "recovery_state": recovery_state_label(snapshot.client.encryption().recovery().state()),
+            "ownership_error": snapshot.startup_error,
         }
     })
 }
@@ -212,7 +251,8 @@ impl ChannelPlugin for MatrixPlugin {
         info!(account_id, homeserver = %cfg.homeserver, "starting matrix account");
 
         let client = client::build_client(account_id, &cfg).await?;
-        let bot_user_id = client::authenticate_client(&client, account_id, &cfg).await?;
+        let authenticated = client::authenticate_client(&client, account_id, &cfg).await?;
+        let bot_user_id = authenticated.user_id;
 
         let cancel = tokio_util::sync::CancellationToken::new();
 
@@ -229,6 +269,7 @@ impl ChannelPlugin for MatrixPlugin {
                 event_sink: self.event_sink.clone(),
                 cancel: cancel.clone(),
                 bot_user_id: bot_user_id.to_string(),
+                ownership_startup_error: authenticated.ownership_startup_error,
                 otp: std::sync::Mutex::new(OtpState::new(otp_cooldown)),
                 verification: std::sync::Mutex::new(Default::default()),
             });
@@ -335,19 +376,42 @@ impl ChannelOtpProvider for MatrixPlugin {
 #[async_trait]
 impl ChannelStatus for MatrixPlugin {
     async fn probe(&self, account_id: &str) -> ChannelResult<ChannelHealthSnapshot> {
-        let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(state) = accounts.get(account_id) {
-            let connected = state.client.matrix_auth().logged_in();
+        let snapshot = {
+            let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
+            accounts.get(account_id).map(|state| {
+                let prompts = {
+                    let verification = state
+                        .verification
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    let mut prompts = verification.prompts.values().cloned().collect::<Vec<_>>();
+                    prompts.sort_by(|left, right| left.other_user_id.cmp(&right.other_user_id));
+                    prompts
+                };
+                (
+                    state.client.matrix_auth().logged_in(),
+                    state.bot_user_id.clone(),
+                    MatrixStatusSnapshot {
+                        client: state.client.clone(),
+                        config: state.config.clone(),
+                        prompts,
+                        startup_error: state.ownership_startup_error.clone(),
+                    },
+                )
+            })
+        };
+
+        if let Some((connected, bot_user_id, snapshot)) = snapshot {
             let details = if connected {
-                format!("syncing as {}", state.bot_user_id)
+                format!("syncing as {bot_user_id}")
             } else {
                 "not logged in".to_string()
             };
             Ok(ChannelHealthSnapshot {
                 connected,
-                account_id: state.account_id.clone(),
+                account_id: account_id.to_string(),
                 details: Some(details),
-                extra: Some(matrix_status_extra(state)),
+                extra: Some(matrix_status_extra(snapshot).await),
             })
         } else {
             Ok(ChannelHealthSnapshot {
@@ -401,6 +465,7 @@ mod tests {
             event_sink: None,
             cancel,
             bot_user_id: "@moltis:example.com".into(),
+            ownership_startup_error: None,
             otp: std::sync::Mutex::new(OtpState::new(300)),
             verification: std::sync::Mutex::new(Default::default()),
         }
@@ -466,6 +531,43 @@ mod tests {
         assert_eq!(pending[0].peer_id, "alice");
         assert_eq!(pending[0].username.as_deref(), Some("alice"));
         assert_eq!(pending[0].sender_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn probe_exposes_matrix_ownership_details() {
+        let plugin = MatrixPlugin::new();
+        let cancel = CancellationToken::new();
+        {
+            let mut map = plugin.accounts.write().unwrap_or_else(|e| e.into_inner());
+            let mut state = test_account_state(cancel);
+            state.config.ownership_mode = crate::config::MatrixOwnershipMode::MoltisOwned;
+            state.config.password = Some(Secret::new("wordpass".into()));
+            state.config.access_token = Secret::new(String::new());
+            state.config.device_id = Some("MOLTISBOT".into());
+            state.config.device_display_name = Some("Moltis Matrix Bot".into());
+            state.ownership_startup_error = Some("ownership setup failed".into());
+            map.insert("test".into(), state);
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|error| panic!("matrix test runtime should build: {error}"));
+
+        let snapshot = runtime
+            .block_on(plugin.probe("test"))
+            .unwrap_or_else(|error| panic!("probe should succeed: {error}"));
+
+        assert!(!snapshot.connected);
+        let extra = snapshot
+            .extra
+            .unwrap_or_else(|| panic!("matrix probe should include extra status"));
+        assert_eq!(extra["matrix"]["ownership_mode"], "moltis_owned");
+        assert_eq!(extra["matrix"]["auth_mode"], "password");
+        assert_eq!(extra["matrix"]["user_id"], "@moltis:example.com");
+        assert_eq!(extra["matrix"]["device_id"], "MOLTISBOT");
+        assert_eq!(extra["matrix"]["device_display_name"], "Moltis Matrix Bot");
+        assert_eq!(extra["matrix"]["ownership_error"], "ownership setup failed");
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub struct AccountState {
     pub event_sink: Option<Arc<dyn ChannelEventSink>>,
     pub cancel: CancellationToken,
     pub bot_user_id: String,
+    pub ownership_startup_error: Option<String>,
     /// In-memory OTP challenges (std::sync::Mutex — never held across .await).
     pub otp: Mutex<OtpState>,
     /// In-memory Matrix verification flow state.

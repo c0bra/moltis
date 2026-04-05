@@ -714,6 +714,7 @@ reset_on_exit = true              # Reset serve/funnel when gateway shuts down
 # user_id = "@bot:example.com"    # Required for password login, auto-detected for token auth
 # device_id = "MOLTISBOT"         # Optional device ID for session restore
 # device_display_name = "Moltis Matrix Bot"  # Optional display name for password logins
+# ownership_mode = "moltis_owned" # "moltis_owned" or "user_managed"
 # dm_policy = "allowlist"         # "open", "allowlist", or "disabled"
 # room_policy = "allowlist"       # "open", "allowlist", or "disabled"
 # mention_mode = "mention"        # "mention", "always", or "none"

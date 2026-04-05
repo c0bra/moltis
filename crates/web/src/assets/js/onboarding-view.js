@@ -22,8 +22,10 @@ import {
 	matrixAuthModeGuidance,
 	matrixCredentialLabel,
 	matrixCredentialPlaceholder,
+	matrixOwnershipModeGuidance,
 	normalizeMatrixAuthMode,
 	normalizeMatrixOtpCooldown,
+	normalizeMatrixOwnershipMode,
 	parseChannelConfigPatch,
 	validateChannelFields,
 } from "./channel-utils.js";
@@ -3026,6 +3028,7 @@ function MatrixForm({ onConnected, error, setError }) {
 	var [userId, setUserId] = useState("");
 	var [credential, setCredential] = useState("");
 	var [deviceDisplayName, setDeviceDisplayName] = useState("");
+	var [ownershipMode, setOwnershipMode] = useState("moltis_owned");
 	var [dmPolicy, setDmPolicy] = useState("allowlist");
 	var [roomPolicy, setRoomPolicy] = useState("allowlist");
 	var [mentionMode, setMentionMode] = useState("mention");
@@ -3069,6 +3072,8 @@ function MatrixForm({ onConnected, error, setError }) {
 		setSaving(true);
 		var config = {
 			homeserver: homeserver.trim(),
+			ownership_mode:
+				normalizeMatrixAuthMode(authMode) === "password" ? normalizeMatrixOwnershipMode(ownershipMode) : "user_managed",
 			dm_policy: dmPolicy,
 			room_policy: roomPolicy,
 			mention_mode: mentionMode,
@@ -3123,6 +3128,21 @@ function MatrixForm({ onConnected, error, setError }) {
 			</select>
 			<div class="text-xs text-[var(--muted)] mt-1">${matrixAuthModeGuidance(authMode)}</div>
 		</div>
+		${
+			authMode === "password"
+				? html`<label class="flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3">
+					<input
+						type="checkbox"
+						aria-label="Let Moltis own this Matrix account"
+						checked=${normalizeMatrixOwnershipMode(ownershipMode) === "moltis_owned"}
+						onChange=${(e) => setOwnershipMode(e.target.checked ? "moltis_owned" : "user_managed")} />
+					<span class="flex flex-col gap-1">
+						<span class="text-xs font-medium text-[var(--text-strong)]">Let Moltis own this Matrix account</span>
+						<span class="text-xs text-[var(--muted)]">${matrixOwnershipModeGuidance(authMode, ownershipMode)}</span>
+					</span>
+				</label>`
+				: html`<div class="text-xs text-[var(--muted)]">${matrixOwnershipModeGuidance(authMode, "user_managed")}</div>`
+		}
 		<div>
 			<label class="text-xs text-[var(--muted)] mb-1 block">Matrix User ID${authMode === "password" ? " (required)" : " (optional)"}</label>
 			<input type="text" class="provider-key-input w-full"

@@ -645,7 +645,9 @@ impl ChannelStreamOutbound for MatrixOutbound {
                         Some(StreamEvent::Done) => {
                             if let Some(eid) = &sent_event_id {
                                 let edit = make_edit_content(eid, &buffer);
-                                let _ = room.send(edit).await;
+                                if let Err(error) = room.send(edit).await {
+                                    warn!(account_id, room_id = to, "stream final edit failed: {error}");
+                                }
                             } else if !buffer.is_empty() {
                                 let content = Self::make_message_content(
                                     &room,
@@ -667,7 +669,9 @@ impl ChannelStreamOutbound for MatrixOutbound {
                                 buffer.push_str("\n\n[stream error]");
                                 if let Some(eid) = &sent_event_id {
                                     let edit = make_edit_content(eid, &buffer);
-                                    let _ = room.send(edit).await;
+                                    if let Err(error) = room.send(edit).await {
+                                        warn!(account_id, room_id = to, "stream error edit failed: {error}");
+                                    }
                                 } else {
                                     let content = Self::make_message_content(
                                         &room,

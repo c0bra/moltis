@@ -36,6 +36,7 @@ use {
         plugin::{ChannelEventSink, ChannelMessageKind, ChannelMessageMeta, ChannelReplyTarget},
     },
     moltis_common::types::ChatType,
+    time::OffsetDateTime,
 };
 
 use crate::{
@@ -1120,10 +1121,7 @@ pub async fn send_text(room: &Room, text: &str) -> Result<(), matrix_sdk::Error>
 }
 
 fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    OffsetDateTime::now_utc().unix_timestamp()
 }
 
 async fn log_inbound_message(message_log: &Option<Arc<dyn MessageLog>>, entry: MessageLogEntry) {

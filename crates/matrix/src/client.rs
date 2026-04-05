@@ -4,8 +4,12 @@ use {
     matrix_sdk::{
         Client, Room,
         config::SyncSettings,
-        encryption::{BackupDownloadStrategy, EncryptionSettings},
-        ruma::{OwnedUserId, events::room::encrypted::OriginalSyncRoomEncryptedEvent},
+        encryption::{BackupDownloadStrategy, EncryptionSettings, recovery::RecoveryState},
+        ruma::{
+            OwnedUserId,
+            api::client::uiaa::{AuthData, Password, UserIdentifier},
+            events::room::encrypted::OriginalSyncRoomEncryptedEvent,
+        },
     },
     reqwest::StatusCode,
     secrecy::ExposeSecret,
@@ -16,12 +20,23 @@ use {
 
 use moltis_channels::{Error as ChannelError, Result as ChannelResult};
 
-use crate::{config::MatrixAccountConfig, handler, state::AccountStateMap, verification};
+use crate::{
+    config::{MatrixAccountConfig, MatrixOwnershipMode},
+    handler,
+    state::AccountStateMap,
+    verification,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuthMode {
     AccessToken,
     Password,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthenticatedMatrixAccount {
+    pub user_id: OwnedUserId,
+    pub ownership_startup_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +106,7 @@ pub(crate) async fn authenticate_client(
     client: &Client,
     account_id: &str,
     config: &MatrixAccountConfig,
-) -> ChannelResult<OwnedUserId> {
+) -> ChannelResult<AuthenticatedMatrixAccount> {
     match auth_mode(config)? {
         AuthMode::AccessToken => {
             let identity = restore_access_token_session(client, account_id, config).await?;
@@ -105,7 +120,10 @@ pub(crate) async fn authenticate_client(
                 device_id = identity.device_id.as_deref().unwrap_or("<unknown>"),
                 "matrix session restored"
             );
-            Ok(identity.user_id)
+            Ok(AuthenticatedMatrixAccount {
+                user_id: identity.user_id,
+                ownership_startup_error: None,
+            })
         },
         AuthMode::Password => {
             login_with_password(client, account_id, config).await?;
@@ -118,8 +136,117 @@ pub(crate) async fn authenticate_client(
                 .await
                 .map_err(|error| ChannelError::external("matrix whoami", error))?
                 .user_id;
+            let ownership_startup_error =
+                maybe_take_matrix_account_ownership(client, account_id, config).await;
             info!(account_id, user_id = %bot_user_id, "matrix password login complete");
-            Ok(bot_user_id)
+            Ok(AuthenticatedMatrixAccount {
+                user_id: bot_user_id,
+                ownership_startup_error,
+            })
+        },
+    }
+}
+
+async fn maybe_take_matrix_account_ownership(
+    client: &Client,
+    account_id: &str,
+    config: &MatrixAccountConfig,
+) -> Option<String> {
+    if config.ownership_mode != MatrixOwnershipMode::MoltisOwned {
+        return None;
+    }
+
+    match ensure_moltis_owned_encryption_state(client, account_id, config).await {
+        Ok(()) => None,
+        Err(error) => {
+            warn!(account_id, error = %error, "matrix ownership setup failed");
+            Some(error.to_string())
+        },
+    }
+}
+
+#[instrument(skip(client, config), fields(account_id))]
+async fn ensure_moltis_owned_encryption_state(
+    client: &Client,
+    account_id: &str,
+    config: &MatrixAccountConfig,
+) -> ChannelResult<()> {
+    let Some(user_id) = config
+        .user_id
+        .as_deref()
+        .filter(|user_id| !user_id.is_empty())
+    else {
+        return Err(ChannelError::invalid_input(
+            "user_id is required when Moltis owns a Matrix account",
+        ));
+    };
+    let Some(password) = config.password.as_ref() else {
+        return Err(ChannelError::invalid_input(
+            "password is required when Moltis owns a Matrix account",
+        ));
+    };
+
+    bootstrap_cross_signing_with_password(client, user_id, password.expose_secret()).await?;
+
+    match client.encryption().recovery().state() {
+        RecoveryState::Disabled => {
+            client
+                .encryption()
+                .recovery()
+                .enable()
+                .await
+                .map_err(|error| ChannelError::external("matrix recovery enable", error))?;
+            info!(account_id, "matrix ownership recovery enabled");
+        },
+        RecoveryState::Enabled => {
+            info!(account_id, "matrix ownership recovery already enabled");
+        },
+        RecoveryState::Incomplete => {
+            return Err(ChannelError::invalid_input(
+                "matrix account already has incomplete secret storage; switch to user-managed mode or repair the account in Element",
+            ));
+        },
+        RecoveryState::Unknown => {
+            warn!(
+                account_id,
+                "matrix recovery state is still unknown after login, skipping automatic ownership bootstrap"
+            );
+        },
+    }
+
+    Ok(())
+}
+
+async fn bootstrap_cross_signing_with_password(
+    client: &Client,
+    user_id: &str,
+    password: &str,
+) -> ChannelResult<()> {
+    match client
+        .encryption()
+        .bootstrap_cross_signing_if_needed(None)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let Some(response) = error.as_uiaa_response() else {
+                return Err(ChannelError::external(
+                    "matrix cross-signing bootstrap",
+                    error,
+                ));
+            };
+
+            let mut auth = Password::new(
+                UserIdentifier::UserIdOrLocalpart(user_id.to_owned()),
+                password.to_owned(),
+            );
+            auth.session = response.session.clone();
+
+            client
+                .encryption()
+                .bootstrap_cross_signing(Some(AuthData::Password(auth)))
+                .await
+                .map_err(|error| ChannelError::external("matrix cross-signing bootstrap", error))
         },
     }
 }

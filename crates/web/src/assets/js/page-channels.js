@@ -18,8 +18,10 @@ import {
 	matrixAuthModeGuidance,
 	matrixCredentialLabel,
 	matrixCredentialPlaceholder,
+	matrixOwnershipModeGuidance,
 	normalizeMatrixAuthMode,
 	normalizeMatrixOtpCooldown,
+	normalizeMatrixOwnershipMode,
 	parseChannelConfigPatch,
 	validateChannelFields,
 } from "./channel-utils.js";
@@ -118,6 +120,72 @@ function prettyConfigJson(value) {
 	} catch (_error) {
 		return "{}";
 	}
+}
+
+function copyToClipboard(value, successMessage) {
+	var text = String(value || "").trim();
+	if (!text) return;
+	navigator.clipboard.writeText(text).then(() => showToast(successMessage));
+}
+
+function MatrixInfoRow({ label, value, copyLabel = null }) {
+	var text = String(value || "").trim();
+	return html`<div class="flex items-center justify-between gap-3">
+		<div class="min-w-0">
+			<div class="text-[11px] uppercase tracking-wide text-emerald-200/70">${label}</div>
+			<div class="truncate font-mono text-emerald-50">${text || "\u2014"}</div>
+		</div>
+		${
+			text &&
+			html`<button
+				type="button"
+				class="provider-btn provider-btn-sm provider-btn-secondary"
+				onClick=${() => copyToClipboard(text, copyLabel || `${label} copied`)}>
+				Copy
+			</button>`
+		}
+	</div>`;
+}
+
+function MatrixOwnershipCard({ channel, matrixStatus }) {
+	var ownershipMode = normalizeMatrixOwnershipMode(matrixStatus?.ownership_mode);
+	var authMode = normalizeMatrixAuthMode(matrixStatus?.auth_mode);
+	var recoveryState = String(matrixStatus?.recovery_state || "unknown");
+	var deviceVerified = !!matrixStatus?.device_verified_by_owner;
+	var ownershipError = String(matrixStatus?.ownership_error || "").trim();
+	var modeTitle = ownershipMode === "moltis_owned" ? "Managed by Moltis" : "User-managed in Element";
+	var modeText =
+		authMode === "password"
+			? matrixOwnershipModeGuidance(authMode, ownershipMode)
+			: "Access token auth is always user-managed. If you want encrypted Matrix chats, reconnect this channel with password auth so Moltis can create its own device.";
+	var verificationText = deviceVerified ? "Device verified by owner" : "Device not yet verified by owner";
+	return html`<div class="rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+		<div class="flex items-center gap-2">
+			<div class="font-medium text-sky-50">${modeTitle}</div>
+			<span class="provider-item-badge ${deviceVerified ? "configured" : "oauth"}">${verificationText}</span>
+		</div>
+		<div class="mt-1 text-sky-100/90">${modeText}</div>
+		<div class="mt-2 grid gap-2">
+			<${MatrixInfoRow} label="Homeserver" value=${channel.config?.homeserver || ""} copyLabel="Homeserver copied" />
+			<${MatrixInfoRow} label="Matrix user" value=${matrixStatus?.user_id || ""} copyLabel="Matrix user ID copied" />
+			<${MatrixInfoRow} label="Device ID" value=${matrixStatus?.device_id || ""} copyLabel="Matrix device ID copied" />
+			<${MatrixInfoRow}
+				label="Device name"
+				value=${matrixStatus?.device_display_name || channel.config?.device_display_name || ""}
+				copyLabel="Matrix device name copied" />
+		</div>
+		<div class="mt-2 text-sky-100/90">
+			Cross-signing: <span class="font-medium">${matrixStatus?.cross_signing_complete ? "ready" : "not ready"}</span>.
+			Recovery: <span class="font-medium">${recoveryState}</span>.
+		</div>
+		${
+			ownershipError &&
+			html`<div class="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-100">
+				<div class="font-medium text-amber-50">Ownership setup needs attention</div>
+				<div class="mt-1">${ownershipError}</div>
+			</div>`
+		}
+	</div>`;
 }
 
 function AdvancedConfigPatchField({ value, onInput, currentConfig = null }) {
@@ -224,6 +292,9 @@ function ChannelCard(props) {
 		? matrixStatus.pending_verifications
 		: [];
 	var verificationStateLabel = matrixStatus?.verification_state || null;
+	var showOwnershipCard =
+		channelType(ch.type) === "matrix" &&
+		(matrixStatus?.user_id || matrixStatus?.device_id || ch.config?.homeserver || matrixStatus?.ownership_error);
 
 	return html`<div class="provider-card p-3 rounded-lg mb-2">
     <div class="flex items-center gap-2.5">
@@ -257,6 +328,7 @@ function ChannelCard(props) {
 					)}
 		    </div>`
 		}
+    ${showOwnershipCard && html`<${MatrixOwnershipCard} channel=${ch} matrixStatus=${matrixStatus} />`}
     <div class="flex gap-2">
       <button class="provider-btn provider-btn-sm provider-btn-secondary" title="Edit ${ch.account_id || "channel"}"
         onClick=${() => {
@@ -1072,6 +1144,7 @@ function AddMatrixModal() {
 	var userIdDraft = useSignal("");
 	var credentialDraft = useSignal("");
 	var deviceDisplayNameDraft = useSignal("");
+	var ownershipModeDraft = useSignal("moltis_owned");
 	var otpSelfApprovalDraft = useSignal(true);
 	var otpCooldownDraft = useSignal("300");
 	var advancedConfigPatch = useSignal("");
@@ -1105,6 +1178,7 @@ function AddMatrixModal() {
 		saving.value = true;
 		var addConfig = {
 			homeserver: homeserver,
+			ownership_mode: authMode === "password" ? normalizeMatrixOwnershipMode(ownershipModeDraft.value) : "user_managed",
 			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
 			room_policy: form.querySelector("[data-field=roomPolicy]").value,
 			mention_mode: form.querySelector("[data-field=mentionMode]").value,
@@ -1139,6 +1213,7 @@ function AddMatrixModal() {
 				userIdDraft.value = "";
 				credentialDraft.value = "";
 				deviceDisplayNameDraft.value = "";
+				ownershipModeDraft.value = "moltis_owned";
 				otpSelfApprovalDraft.value = true;
 				otpCooldownDraft.value = "300";
 				advancedConfigPatch.value = "";
@@ -1191,6 +1266,30 @@ function AddMatrixModal() {
 	        <option value="password">Password</option>
 	      </select>
 	      <div class="text-xs text-[var(--muted)]">${matrixAuthModeGuidance(authModeDraft.value)}</div>
+	      ${
+					authModeDraft.value === "password"
+						? html`
+	        <label class="flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--surface2)] px-3 py-2">
+	          <input
+	            type="checkbox"
+	            aria-label="Let Moltis own this Matrix account"
+	            checked=${normalizeMatrixOwnershipMode(ownershipModeDraft.value) === "moltis_owned"}
+	            onChange=${(e) => {
+								ownershipModeDraft.value = e.target.checked ? "moltis_owned" : "user_managed";
+							}} />
+	          <span class="flex flex-col gap-1">
+	            <span class="text-xs font-medium text-[var(--text-strong)]">Let Moltis own this Matrix account</span>
+	            <span class="text-xs text-[var(--muted)]">${matrixOwnershipModeGuidance(
+								authModeDraft.value,
+								ownershipModeDraft.value,
+							)}</span>
+	          </span>
+	        </label>`
+						: html`<div class="text-xs text-[var(--muted)]">${matrixOwnershipModeGuidance(
+								authModeDraft.value,
+								"user_managed",
+							)}</div>`
+				}
 	      <label class="text-xs text-[var(--muted)]">Matrix User ID${authModeDraft.value === "password" ? " (required)" : " (optional)"}</label>
 	      <input data-field="userId" type="text" placeholder="@bot:example.com"
 	        value=${userIdDraft.value}
@@ -1467,6 +1566,7 @@ function EditChannelModal() {
 	var editWebhookSecret = useSignal("");
 	var editMatrixAuthMode = useSignal("access_token");
 	var editMatrixDeviceDisplayName = useSignal("");
+	var editMatrixOwnershipMode = useSignal("user_managed");
 	var editMatrixOtpSelfApproval = useSignal(true);
 	var editMatrixOtpCooldown = useSignal("300");
 	var editAdvancedConfigPatch = useSignal("");
@@ -1478,6 +1578,9 @@ function EditChannelModal() {
 		editWebhookSecret.value = ch?.config?.webhook_secret || "";
 		editMatrixAuthMode.value = ch?.config?.password ? "password" : "access_token";
 		editMatrixDeviceDisplayName.value = ch?.config?.device_display_name || "";
+		editMatrixOwnershipMode.value = normalizeMatrixOwnershipMode(
+			ch?.config?.ownership_mode || (ch?.config?.password ? "moltis_owned" : "user_managed"),
+		);
 		editMatrixOtpSelfApproval.value = ch?.config?.otp_self_approval !== false;
 		editMatrixOtpCooldown.value = String(ch?.config?.otp_cooldown_secs || 300);
 		editAdvancedConfigPatch.value = "";
@@ -1512,6 +1615,10 @@ function EditChannelModal() {
 			config.user_id = form.querySelector("[data-field=userId]")?.value || cfg.user_id || "";
 			config.device_id = cfg.device_id || undefined;
 			config.device_display_name = editMatrixDeviceDisplayName.value.trim() || null;
+			config.ownership_mode =
+				normalizeMatrixAuthMode(editMatrixAuthMode.value) === "password"
+					? normalizeMatrixOwnershipMode(editMatrixOwnershipMode.value)
+					: "user_managed";
 			if (normalizeMatrixAuthMode(editMatrixAuthMode.value) === "password") {
 				config.password = editCredential.value || cfg.password || "";
 				config.access_token = "";
@@ -1630,6 +1737,36 @@ function EditChannelModal() {
 				        </select>
 				        <div class="text-xs text-[var(--muted)]">${matrixAuthModeGuidance(editMatrixAuthMode.value)}</div>
 				      </div>`
+				}
+	      ${
+					isMatrix &&
+					html`
+	        <div class="flex flex-col gap-1">
+	          ${
+							editMatrixAuthMode.value === "password"
+								? html`
+					<label class="flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--surface2)] px-3 py-2">
+					  <input
+					    type="checkbox"
+					    aria-label="Let Moltis own this Matrix account"
+					    checked=${normalizeMatrixOwnershipMode(editMatrixOwnershipMode.value) === "moltis_owned"}
+					    onChange=${(e) => {
+								editMatrixOwnershipMode.value = e.target.checked ? "moltis_owned" : "user_managed";
+							}} />
+					  <span class="flex flex-col gap-1">
+					    <span class="text-xs font-medium text-[var(--text-strong)]">Let Moltis own this Matrix account</span>
+					    <span class="text-xs text-[var(--muted)]">${matrixOwnershipModeGuidance(
+								editMatrixAuthMode.value,
+								editMatrixOwnershipMode.value,
+							)}</span>
+					  </span>
+					</label>`
+								: html`<div class="text-xs text-[var(--muted)]">${matrixOwnershipModeGuidance(
+										editMatrixAuthMode.value,
+										"user_managed",
+									)}</div>`
+						}
+	        </div>`
 				}
 	      ${
 					isMatrix &&

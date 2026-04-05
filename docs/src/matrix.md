@@ -20,6 +20,12 @@ own E2EE keys locally. After that:
 - Moltis posts emoji confirmation instructions in the Matrix chat
 - Reply `verify yes`, `verify no`, `verify show`, or `verify cancel` in Matrix
 - Older encrypted history may remain unreadable until keys are shared
+
+For dedicated bot accounts, the web UI now defaults to **Let Moltis own this
+Matrix account**. In that mode Moltis bootstraps cross-signing and recovery for
+the bot account so its own device can be verified automatically. If you want to
+open the same bot account in Element yourself, switch the channel to
+user-managed mode instead.
 ```
 
 ## How It Works
@@ -164,6 +170,7 @@ If you want encrypted Matrix chats, use password auth:
 homeserver = "https://matrix.example.com"
 user_id = "@bot:example.com"
 password = "correct horse battery staple"
+ownership_mode = "moltis_owned"
 device_display_name = "Moltis Matrix Bot"
 ```
 
@@ -194,6 +201,7 @@ offered = ["telegram", "discord", "slack", "matrix"]
 | `user_id` | no | — | Bot user ID, for example `@bot:example.com`, auto-detected via `whoami` when omitted |
 | `device_id` | no | — | Optional device ID used for session restore |
 | `device_display_name` | no | — | Optional device display name used for password-based logins |
+| `ownership_mode` | no | `"user_managed"` | Who manages cross-signing and recovery: `"moltis_owned"` or `"user_managed"` |
 | `dm_policy` | no | `"allowlist"` | Who can DM the bot: `"open"`, `"allowlist"`, or `"disabled"` |
 | `room_policy` | no | `"allowlist"` | Which rooms can talk to the bot: `"open"`, `"allowlist"`, or `"disabled"` |
 | `mention_mode` | no | `"mention"` | When the bot responds in rooms: `"always"`, `"mention"`, or `"none"` |
@@ -220,7 +228,9 @@ When you add Matrix through the web UI:
 - Moltis auto-generates the internal `account_id`
 - the saved account lives in `data_dir()/moltis.db`, not in `moltis.toml`
 - encrypted Matrix chats require password auth
+- password-based channels default to **Let Moltis own this Matrix account**
 - access-token auth is for plain Matrix traffic only, because Moltis cannot import the existing device's private E2EE keys from an access token
+- if you switch a channel to user-managed mode, the Channels page shows the homeserver, user ID, device ID, and device name you need to open that bot account in Element
 - if Element starts device verification, Moltis accepts it and posts emoji confirmation instructions in the room
 - send `verify yes`, `verify no`, `verify show`, or `verify cancel` as normal messages in that same Matrix chat to finish or inspect the verification flow
 - older encrypted history may still be unreadable if this Moltis device joined after those keys were created
@@ -243,6 +253,7 @@ offered = ["matrix"]
 homeserver = "https://matrix.example.com"
 user_id = "@bot:example.com"
 password = "correct horse battery staple"
+ownership_mode = "moltis_owned"
 device_id = "MOLTISBOT"
 device_display_name = "Moltis Matrix Bot"
 dm_policy = "allowlist"

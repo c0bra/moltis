@@ -57,6 +57,19 @@ export function normalizeMatrixAuthMode(authMode) {
 	return authMode === "password" ? "password" : "access_token";
 }
 
+export function normalizeMatrixOwnershipMode(mode) {
+	return mode === "moltis_owned" ? "moltis_owned" : "user_managed";
+}
+
+export function matrixOwnershipModeGuidance(authMode, ownershipMode) {
+	if (normalizeMatrixAuthMode(authMode) !== "password") {
+		return "Access token auth always stays user-managed because it reuses an existing Matrix session instead of giving Moltis full control of the account's encryption state.";
+	}
+	return normalizeMatrixOwnershipMode(ownershipMode) === "moltis_owned"
+		? "Recommended for dedicated bot accounts. Moltis bootstraps cross-signing and recovery for this account so it can verify its own Matrix device automatically."
+		: "Use this if you want to open the same bot account in Element or another Matrix client yourself. Moltis will not try to take over the account's cross-signing or recovery state.";
+}
+
 export function matrixCredentialLabel(authMode) {
 	return normalizeMatrixAuthMode(authMode) === "password" ? "Password" : "Access Token";
 }

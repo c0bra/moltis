@@ -594,6 +594,7 @@ test.describe("Settings navigation", () => {
 		await expect(
 			page.getByText("do not transfer that device's private encryption keys into Moltis", { exact: false }),
 		).toBeVisible();
+		await expect(page.getByText("Access token auth always stays user-managed", { exact: false })).toBeVisible();
 		await expect(page.getByText("verify yes", { exact: false })).toBeVisible();
 		await expect(page.getByRole("link", { name: "Matrix setup docs", exact: true })).toHaveAttribute(
 			"href",
@@ -655,6 +656,7 @@ test.describe("Settings navigation", () => {
 		expect(sentRequest.config).toMatchObject({
 			homeserver: "https://matrix.example.com",
 			access_token: "syt_test_token",
+			ownership_mode: "user_managed",
 			auto_join: "always",
 			otp_self_approval: true,
 			otp_cooldown_secs: 300,
@@ -710,6 +712,7 @@ test.describe("Settings navigation", () => {
 		await page.locator('input[data-field="homeserver"]').fill("https://matrix.example.com");
 		await page.locator('select[data-field="authMode"]').selectOption("password");
 		await expect(page.getByText("Required for encrypted Matrix chats.", { exact: false })).toBeVisible();
+		await expect(page.getByLabel("Let Moltis own this Matrix account", { exact: true })).toBeChecked();
 		await page.locator('input[data-field="userId"]').fill("@bot:example.com");
 		await page.locator('input[data-field="credential"]').fill("correct horse battery staple");
 		await page.locator('select[data-field="autoJoin"]').selectOption("allowlist");
@@ -742,6 +745,7 @@ test.describe("Settings navigation", () => {
 			homeserver: "https://matrix.example.com",
 			user_id: "@bot:example.com",
 			password: "correct horse battery staple",
+			ownership_mode: "moltis_owned",
 			auto_join: "allowlist",
 			otp_self_approval: true,
 			otp_cooldown_secs: 300,
@@ -788,6 +792,14 @@ test.describe("Settings navigation", () => {
 										extra: {
 											matrix: {
 												verification_state: "unverified",
+												ownership_mode: "moltis_owned",
+												auth_mode: "password",
+												user_id: "@moltis-testbot:matrix.org",
+												device_id: "MOLTISBOT",
+												device_display_name: "Moltis Matrix Bot",
+												cross_signing_complete: true,
+												device_verified_by_owner: false,
+												recovery_state: "enabled",
 												pending_verifications: [
 													{
 														flow_id: "flow-1",
@@ -816,6 +828,10 @@ test.describe("Settings navigation", () => {
 
 		await expect(page.getByText("Matrix (moltis-testbot)", { exact: true })).toBeVisible();
 		await expect(page.getByText("Encryption device state: unverified", { exact: false })).toBeVisible();
+		await expect(page.getByText("Managed by Moltis", { exact: true })).toBeVisible();
+		await expect(page.getByText("Device not yet verified by owner", { exact: true })).toBeVisible();
+		await expect(page.getByText("@moltis-testbot:matrix.org", { exact: true })).toBeVisible();
+		await expect(page.getByText("MOLTISBOT", { exact: true })).toBeVisible();
 		await expect(page.getByText("Verification pending", { exact: true })).toBeVisible();
 		await expect(page.getByText("With @alice:matrix.org", { exact: true })).toBeVisible();
 		await expect(page.getByText("verify yes", { exact: false })).toBeVisible();
