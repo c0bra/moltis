@@ -412,7 +412,12 @@ function FeaturedCard(props) {
 	var headerVal = useSignal("");
 	var timeoutVal = useSignal("");
 
-	var needsConfig = Boolean(f.requiresConfig || (f.envKeys && f.envKeys.length > 0) || f.transport === "sse" || f.transport === "streamable-http");
+	var needsConfig = Boolean(
+		f.requiresConfig ||
+			(f.envKeys && f.envKeys.length > 0) ||
+			f.transport === "sse" ||
+			f.transport === "streamable-http",
+	);
 	var isSse = f.transport === "sse" || f.transport === "streamable-http";
 
 	async function addConfiguredFeaturedServer(payload) {
@@ -856,10 +861,10 @@ function ServerCard({ server }) {
 		});
 		if (!timeoutResult.ok) return null;
 
-		var editResult =
-			(transport === "sse" || transport === "streamable-http")
-				? buildSseEditPayload(server, editUrl.value, editHeaders.value, clearHeaders.value)
-				: buildStdioEditPayload(editCmd.value, editArgs.value, editEnv.value);
+			var editResult =
+				transport === "sse" || transport === "streamable-http"
+					? buildSseEditPayload(server, editUrl.value, editHeaders.value, clearHeaders.value)
+					: buildStdioEditPayload(editCmd.value, editArgs.value, editEnv.value);
 		if (editResult.error) {
 			showToast(editResult.error, "error");
 			saving.value = false;
@@ -1002,9 +1007,10 @@ function ServerCard({ server }) {
 	          <div class="text-xs text-[var(--muted)] mt-1">${clearHeaders.value ? html`Saving now removes every stored header for this remote server.` : html`Leave blank to preserve stored headers. Enter new lines to replace them, or click <strong>Clear stored headers</strong> to remove them entirely. Use <code>$NAME</code> or <code>${"{NAME}"}</code> for env-backed values.`}</div>
 	        </div>`
 					}
-	        ${
-						(editTransport.value !== "sse" && editTransport.value !== "streamable-http") &&
-						html`<div>
+		        ${
+							editTransport.value !== "sse" &&
+							editTransport.value !== "streamable-http" &&
+							html`<div>
         <div class="project-edit-group mb-2 mt-2">
           <div class="text-xs text-[var(--muted)] mb-1">Command</div>
           <input type="text" class="provider-key-input w-full font-mono" value=${editCmd.value}
