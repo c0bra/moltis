@@ -284,8 +284,8 @@ async fn fetch_copilot_auth(
         access_token: Secret::new(copilot_resp.token.clone()),
         refresh_token: None,
         id_token: None,
-        // Persist the enterprise proxy-ep hostname (if any) so we can
-        // reconstruct the correct base URL from the cache.
+        // NOTE: account_id is repurposed here to persist the enterprise
+        // proxy-ep hostname so it can be recovered from the token cache.
         account_id: copilot_resp.proxy_ep.clone(),
         expires_at: Some(copilot_resp.expires_at),
     });
@@ -586,7 +586,12 @@ async fn collect_streamed_completion(
             .or_else(|| line.strip_prefix("data:"))
         {
             match process_openai_sse_line(data, &mut state) {
-                SseLineResult::Done | SseLineResult::Events(_) | SseLineResult::Skip => {},
+                SseLineResult::Done => {
+                    events.extend(finalize_stream(&mut state));
+                    return Ok(stream_events_to_completion(events));
+                },
+                SseLineResult::Events(evts) => events.extend(evts),
+                SseLineResult::Skip => {},
             }
         }
     }
@@ -800,7 +805,7 @@ impl GitHubCopilotProvider {
         messages: &[ChatMessage],
         tools: &[serde_json::Value],
     ) -> anyhow::Result<CompletionResponse> {
-        let token = self.get_valid_copilot_token().await?;
+        let auth = self.get_copilot_auth().await?;
 
         let (instructions, input) = split_responses_instructions_and_input(messages.to_vec());
 
@@ -826,8 +831,8 @@ impl GitHubCopilotProvider {
 
         let http_resp = self
             .client
-            .post(format!("{COPILOT_API_BASE}/responses"))
-            .header("Authorization", format!("Bearer {token}"))
+            .post(format!("{}/responses", auth.base_url))
+            .header("Authorization", format!("Bearer {}", auth.token))
             .header("content-type", "application/json")
             .header("Editor-Version", EDITOR_VERSION)
             .header("User-Agent", COPILOT_USER_AGENT)
@@ -862,8 +867,8 @@ impl GitHubCopilotProvider {
         tools: Vec<serde_json::Value>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send + '_>> {
         Box::pin(async_stream::stream! {
-            let token = match self.get_valid_copilot_token().await {
-                Ok(t) => t,
+            let auth = match self.get_copilot_auth().await {
+                Ok(a) => a,
                 Err(e) => {
                     yield StreamEvent::Error(e.to_string());
                     return;
@@ -895,8 +900,8 @@ impl GitHubCopilotProvider {
 
             let resp = match self
                 .client
-                .post(format!("{COPILOT_API_BASE}/responses"))
-                .header("Authorization", format!("Bearer {token}"))
+                .post(format!("{}/responses", auth.base_url))
+                .header("Authorization", format!("Bearer {}", auth.token))
                 .header("content-type", "application/json")
                 .header("Editor-Version", EDITOR_VERSION)
                 .header("User-Agent", COPILOT_USER_AGENT)
