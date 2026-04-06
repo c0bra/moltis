@@ -17,8 +17,8 @@ const LANGUAGES = {
     code: "zh", locale: "zh_CN", file: "index.zh.html",
     langBtn: "中文", langTitle: "切换语言",
     highlightLang: "中文",
-    title: "Moltis — 值得信赖的 Rust 原生 claw",
-    metaDesc: "值得信赖的 Rust 原生 claw。单一二进制文件，沙盒执行，多提供商大语言模型，语音，记忆，Telegram、WhatsApp、Discord、Teams 和 MCP 工具。安全设计，运行在您的硬件上。",
+    title: "Moltis — 安全、持久的 Rust 个人代理服务器",
+    metaDesc: "安全、持久的 Rust 个人代理服务器。单一二进制文件，沙盒执行，多提供商大语言模型，语音，记忆，Telegram、WhatsApp、Discord、Teams 和 MCP 工具。安全设计，运行在您的硬件上。",
     strings: [
       // Nav tabs
       [">Home<", ">首页<"],
@@ -180,8 +180,8 @@ const LANGUAGES = {
     code: "es", locale: "es_ES", file: "index.es.html",
     langBtn: "ES", langTitle: "Cambiar idioma",
     highlightLang: "Espa&#241;ol",
-    title: "Moltis — Un claw nativo en Rust en el que puedes confiar",
-    metaDesc: "Un claw nativo en Rust en el que puedes confiar. Un solo binario, ejecución en sandbox, LLMs multi-proveedor, voz, memoria, Telegram, WhatsApp, Discord, Teams y herramientas MCP. Seguro por diseño, se ejecuta en tu hardware.",
+    title: "Moltis — Un servidor de agente personal seguro y persistente en Rust",
+    metaDesc: "Un servidor de agente personal seguro y persistente en Rust. Un solo binario, ejecución en sandbox, LLMs multi-proveedor, voz, memoria, Telegram, WhatsApp, Discord, Teams y herramientas MCP. Seguro por diseño, se ejecuta en tu hardware.",
     strings: [
       [">Home<", ">Inicio<"],
       [">Install<", ">Instalar<"],
@@ -325,8 +325,8 @@ const LANGUAGES = {
     code: "de", locale: "de_DE", file: "index.de.html",
     langBtn: "DE", langTitle: "Sprache ändern",
     highlightLang: "Deutsch",
-    title: "Moltis — Ein vertrauenswürdiger Rust-nativer Claw",
-    metaDesc: "Ein vertrauenswürdiger Rust-nativer Claw. Ein Binary, Sandbox-Ausführung, Multi-Provider-LLMs, Sprache, Gedächtnis, Telegram, WhatsApp, Discord, Teams und MCP-Tools. Sicher konzipiert, läuft auf Ihrer Hardware.",
+    title: "Moltis — Ein sicherer, persistenter persönlicher Agent-Server in Rust",
+    metaDesc: "Ein sicherer, persistenter persönlicher Agent-Server in Rust. Ein Binary, Sandbox-Ausführung, Multi-Provider-LLMs, Sprache, Gedächtnis, Telegram, WhatsApp, Discord, Teams und MCP-Tools. Sicher konzipiert, läuft auf Ihrer Hardware.",
     strings: [
       [">Home<", ">Startseite<"],
       [">Install<", ">Installieren<"],
@@ -471,8 +471,8 @@ LANGUAGES.it = {
   code: "it", locale: "it_IT", file: "index.it.html",
   langBtn: "IT", langTitle: "Cambia lingua",
   highlightLang: "Italiano",
-  title: "Moltis — Un claw nativo Rust di cui ti puoi fidare",
-  metaDesc: "Un claw nativo Rust di cui ti puoi fidare. Un solo binario, esecuzione in sandbox, LLM multi-provider, voce, memoria, Telegram, WhatsApp, Discord, Teams e strumenti MCP. Sicuro per progettazione, gira sul tuo hardware.",
+  title: "Moltis — Un server agente personale sicuro e persistente in Rust",
+  metaDesc: "Un server agente personale sicuro e persistente in Rust. Un solo binario, esecuzione in sandbox, LLM multi-provider, voce, memoria, Telegram, WhatsApp, Discord, Teams e strumenti MCP. Sicuro per progettazione, gira sul tuo hardware.",
   strings: [
     [">Home<", ">Home<"],
     [">Install<", ">Installa<"],
@@ -571,8 +571,8 @@ LANGUAGES.pt = {
   code: "pt", locale: "pt_BR", file: "index.pt.html",
   langBtn: "PT", langTitle: "Mudar idioma",
   highlightLang: "Portugu&#234;s",
-  title: "Moltis — Um claw nativo em Rust em que você pode confiar",
-  metaDesc: "Um claw nativo em Rust em que você pode confiar. Um binário, execução em sandbox, LLMs multi-provedor, voz, memória, Telegram, WhatsApp, Discord, Teams e ferramentas MCP. Seguro por design, roda no seu hardware.",
+  title: "Moltis — Um servidor de agente pessoal seguro e persistente em Rust",
+  metaDesc: "Um servidor de agente pessoal seguro e persistente em Rust. Um binário, execução em sandbox, LLMs multi-provedor, voz, memória, Telegram, WhatsApp, Discord, Teams e ferramentas MCP. Seguro por design, roda no seu hardware.",
   strings: [
     [">Home<", ">Início<"], [">Install<", ">Instalar<"], [">Features<", ">Recursos<"], [">Security<", ">Segurança<"], [">Compare<", ">Comparar<"],
     ["Fly command copied", "Comando Fly copiado"],
@@ -682,8 +682,8 @@ LANGUAGES.ja = {
   code: "ja", locale: "ja_JP", file: "index.ja.html",
   langBtn: "JA", langTitle: "言語を変更",
   highlightLang: "&#26085;&#26412;&#35486;",
-  title: "Moltis — 信頼できるRustネイティブclaw",
-  metaDesc: "信頼できるRustネイティブclaw。単一バイナリ、サンドボックス実行、マルチプロバイダーLLM、音声、メモリ、Telegram、WhatsApp、Discord、Teams、MCPツール。セキュアな設計、あなたのハードウェアで実行。",
+  title: "Moltis — Rustで構築された安全で永続的なパーソナルエージェントサーバー",
+  metaDesc: "Rustで構築された安全で永続的なパーソナルエージェントサーバー。単一バイナリ、サンドボックス実行、マルチプロバイダーLLM、音声、メモリ、Telegram、WhatsApp、Discord、Teams、MCPツール。セキュアな設計、あなたのハードウェアで実行。",
   strings: [
     [">Home<", ">ホーム<"], [">Install<", ">インストール<"], [">Features<", ">機能<"], [">Security<", ">セキュリティ<"], [">Compare<", ">比較<"],
     ["Fly command copied", "Flyコマンドをコピーしました"],
@@ -793,8 +793,8 @@ LANGUAGES.ko = {
   code: "ko", locale: "ko_KR", file: "index.ko.html",
   langBtn: "KO", langTitle: "언어 변경",
   highlightLang: "&#54620;&#44397;&#50612;",
-  title: "Moltis — 신뢰할 수 있는 Rust 네이티브 claw",
-  metaDesc: "신뢰할 수 있는 Rust 네이티브 claw. 단일 바이너리, 샌드박스 실행, 멀티 프로바이더 LLM, 음성, 메모리, Telegram, WhatsApp, Discord, Teams, MCP 도구. 보안 설계, 당신의 하드웨어에서 실행.",
+  title: "Moltis — Rust로 구축된 안전하고 영구적인 개인 에이전트 서버",
+  metaDesc: "Rust로 구축된 안전하고 영구적인 개인 에이전트 서버. 단일 바이너리, 샌드박스 실행, 멀티 프로바이더 LLM, 음성, 메모리, Telegram, WhatsApp, Discord, Teams, MCP 도구. 보안 설계, 당신의 하드웨어에서 실행.",
   strings: [
     [">Home<", ">홈<"], [">Install<", ">설치<"], [">Features<", ">기능<"], [">Security<", ">보안<"], [">Compare<", ">비교<"],
     ["Fly command copied", "Fly 명령어가 복사되었습니다"],
@@ -904,8 +904,8 @@ LANGUAGES.ru = {
   code: "ru", locale: "ru_RU", file: "index.ru.html",
   langBtn: "RU", langTitle: "Сменить язык",
   highlightLang: "&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;",
-  title: "Moltis — Надёжный Rust-нативный claw",
-  metaDesc: "Надёжный Rust-нативный claw. Один бинарник, песочница, мульти-провайдерные LLM, голос, память, Telegram, WhatsApp, Discord, Teams и MCP-инструменты. Безопасность по умолчанию, работает на вашем оборудовании.",
+  title: "Moltis — Безопасный персональный агент-сервер на Rust",
+  metaDesc: "Безопасный персональный агент-сервер на Rust. Один бинарник, песочница, мульти-провайдерные LLM, голос, память, Telegram, WhatsApp, Discord, Teams и MCP-инструменты. Безопасность по умолчанию, работает на вашем оборудовании.",
   strings: [
     [">Home<", ">Главная<"], [">Install<", ">Установка<"], [">Features<", ">Возможности<"], [">Security<", ">Безопасность<"], [">Compare<", ">Сравнение<"],
     ["Fly command copied", "Команда Fly скопирована"],
