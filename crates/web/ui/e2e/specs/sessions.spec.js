@@ -49,6 +49,12 @@ async function expectRpcOk(page, method, params) {
 	return response;
 }
 
+function sessionKeysInSidebar(page) {
+	return page
+		.locator("#sessionList .session-item")
+		.evaluateAll((items) => items.map((item) => item.getAttribute("data-session-key") || ""));
+}
+
 async function setSwitchRpcSendMode(page, mode, delayMs = 0) {
 	await page.evaluate(
 		async ({ desiredMode, desiredDelayMs }) => {
@@ -175,8 +181,6 @@ test.describe("Session management", () => {
 		await expect(sessionItems).toHaveCount(initialCount + 1);
 		await expect(page.locator("#chatInput")).toBeFocused();
 
-		// Regression: creating a second session should still update the list
-		// and mark the new session as active.
 		await createSession(page);
 		const secondSessionPath = new URL(page.url()).pathname;
 		const secondSessionKey = secondSessionPath.replace(/^\/chats\//, "").replace(/\//g, ":");
@@ -185,6 +189,17 @@ test.describe("Session management", () => {
 		);
 		await expect(sessionItems).toHaveCount(initialCount + 2);
 		await expect(page.locator("#chatInput")).toBeFocused();
+		await expect
+			.poll(() => sessionKeysInSidebar(page), { timeout: 10_000 })
+			.toEqual(["main", secondSessionKey, firstSessionKey]);
+
+		await page.reload({ waitUntil: "domcontentloaded" });
+		await expectPageContentMounted(page);
+		await waitForWsConnected(page);
+		await expect(page).toHaveURL(new RegExp(`/chats/${secondSessionKey.replace(/:/g, "/")}$`));
+		await expect
+			.poll(() => sessionKeysInSidebar(page), { timeout: 10_000 })
+			.toEqual(["main", secondSessionKey, firstSessionKey]);
 
 		expect(pageErrors).toEqual([]);
 	});

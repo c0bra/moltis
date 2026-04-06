@@ -23,7 +23,7 @@ import { clearSessionHistoryCache, fetchSessions, refreshWelcomeCardIfNeeded, re
 import * as S from "./state.js";
 import { modelStore } from "./stores/model-store.js";
 import { projectStore } from "./stores/project-store.js";
-import { sessionStore } from "./stores/session-store.js";
+import { insertSessionInOrder, sessionStore } from "./stores/session-store.js";
 import { initTheme, injectMarkdownStyles } from "./theme.js";
 import { connect } from "./websocket.js";
 
@@ -114,12 +114,11 @@ function upsertSessionFromEvent(entry) {
 	sessionStore.upsert(entry);
 	var legacy = S.sessions.slice();
 	var idx = legacy.findIndex((session) => session.key === entry.key);
+	var nextEntry = { ...entry };
 	if (idx >= 0) {
-		legacy[idx] = { ...legacy[idx], ...entry };
-	} else {
-		legacy.push({ ...entry });
+		nextEntry = { ...legacy[idx], ...entry };
 	}
-	S.setSessions(legacy);
+	S.setSessions(insertSessionInOrder(legacy, nextEntry));
 	renderSessionList();
 	return true;
 }

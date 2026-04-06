@@ -130,6 +130,30 @@ export var activeSession = computed(() => {
 	return sessions.value.find((s) => s.key === key) || null;
 });
 
+export function compareSessionOrder(left, right) {
+	var leftKey = left?.key || "";
+	var rightKey = right?.key || "";
+	var leftMain = leftKey === "main";
+	var rightMain = rightKey === "main";
+	if (leftMain !== rightMain) return leftMain ? -1 : 1;
+
+	var updatedDiff = (Number(right?.updatedAt) || 0) - (Number(left?.updatedAt) || 0);
+	if (updatedDiff !== 0) return updatedDiff;
+
+	var createdDiff = (Number(right?.createdAt) || 0) - (Number(left?.createdAt) || 0);
+	if (createdDiff !== 0) return createdDiff;
+
+	return leftKey.localeCompare(rightKey);
+}
+
+export function insertSessionInOrder(list, session) {
+	if (!session?.key) return Array.isArray(list) ? list.slice() : [];
+	var result = Array.isArray(list) ? list.filter((entry) => entry?.key !== session.key) : [];
+	result.push(session);
+	result.sort(compareSessionOrder);
+	return result;
+}
+
 // ── Methods ──────────────────────────────────────────────────
 
 /**
@@ -173,10 +197,11 @@ export function upsert(serverData) {
 	var prev = getByKey(serverData.key);
 	if (prev) {
 		prev.update(serverData);
+		sessions.value = insertSessionInOrder(sessions.value, prev);
 		return prev;
 	}
 	var next = new Session(serverData);
-	sessions.value = [...sessions.value, next];
+	sessions.value = insertSessionInOrder(sessions.value, next);
 	return next;
 }
 

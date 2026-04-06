@@ -42,7 +42,7 @@ import {
 	replaceSessionHistory,
 	upsertSessionHistoryMessage,
 } from "./stores/session-history-cache.js";
-import { sessionStore } from "./stores/session-store.js";
+import { insertSessionInOrder, sessionStore } from "./stores/session-store.js";
 import { confirmDialog } from "./ui.js";
 
 var SESSION_PREVIEW_MAX_CHARS = 200;
@@ -1172,7 +1172,7 @@ function ensureSessionInClientStore(key, entry, projectId) {
 	// Keep state.js mirror in sync for legacy call sites.
 	var inLegacy = S.sessions.some((s) => s.key === key);
 	if (!inLegacy) {
-		S.setSessions([...S.sessions, created]);
+		S.setSessions(insertSessionInOrder(S.sessions, created));
 	}
 	return createdSession;
 }
