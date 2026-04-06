@@ -207,6 +207,35 @@ test.describe("Session management", () => {
 		await expectPageContentMounted(page);
 	});
 
+	test("modifier-clicking a session opens it in a new tab", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await navigateAndWait(page, "/");
+		await waitForWsConnected(page);
+
+		await createSession(page);
+		const currentUrl = page.url();
+
+		const mainItem = page.locator('#sessionList .session-item[data-session-key="main"]');
+		await expect(mainItem).toBeVisible();
+
+		const newPagePromise = page.context().waitForEvent("page");
+		await mainItem.click({
+			modifiers: [process.platform === "darwin" ? "Meta" : "Control"],
+		});
+		const newPage = await newPagePromise;
+		const newPageErrors = watchPageErrors(newPage);
+
+		await newPage.waitForLoadState("domcontentloaded");
+		await expectPageContentMounted(newPage);
+		await waitForWsConnected(newPage);
+		await expect(newPage).toHaveURL(/\/chats\/main$/);
+		await expect(page).toHaveURL(currentUrl);
+
+		expect(pageErrors).toEqual([]);
+		expect(newPageErrors).toEqual([]);
+		await newPage.close();
+	});
+
 	test("shows loading indicator while uncached session switch is pending", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await navigateAndWait(page, "/");
