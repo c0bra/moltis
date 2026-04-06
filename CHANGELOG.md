@@ -19,6 +19,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [20260406.04] - 2026-04-06
+### Added
+- [website] Add provider/channel pills section and update branding
+- [website] Add positioning, how-it-works, use cases, and community quote
+
+
+### Changed
+- [providers] Avoid quadratic SSE buffer copies
+- [providers] Align copilot stream error handling
+
+
+### Fixed
+- [providers] Route Copilot enterprise tokens via proxy endpoint (#352)
+- [providers] Address PR review comments on Copilot enterprise
+- [providers] Harden Copilot enterprise proxy security
+- [providers] Reject bare IP addresses in Copilot proxy-ep
+- [providers] Address Copilot enterprise review feedback
+- [providers] Stream enterprise copilot responses
+- [website] Crop MiniMax icon, grayscale raster icons, official GraphQL logo
+- [website] Add Discord source links to community quote
+- [website] Update LoC stats on security page
+- [website] Update LoC stats in all locale files
+- [website] Regenerate all locale files with new homepage sections
+- [website] Update i18n titles and regenerate all locale files
+- [website] Translate new homepage sections in all 9 locale files
+- [website] Translate remaining English strings in all locale files
+- [website] Localize injected nav tabs
+- [website] Address greptile review feedback
+- [website] Sync i18n builder with locale pages
+- [website] Correct i18n generator keys
+
+
+### Security
+- [providers] Redact CopilotTokenResponse token in Debug output
+
 ## [20260406.03] - 2026-04-06
 ### Fixed
 - [web] Restore all-features build
